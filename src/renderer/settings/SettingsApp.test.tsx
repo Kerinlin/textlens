@@ -546,12 +546,11 @@ describe('SettingsApp provider deletion', () => {
       const element = this
       const row = element.closest<HTMLElement>('[data-action-id]')
       const actionId = row?.dataset.actionId
-      const zone = element.closest<HTMLElement>('[data-action-zone]')
       const index = actionId ? rowOrder.get(actionId) ?? 0 : 0
-      const left = zone?.dataset.actionZone === 'disabled' ? 420 : 20
-      const top = actionId ? 500 + index * 64 : 480
-      const width = actionId ? 360 : 380
-      const height = actionId ? 54 : 460
+      const left = 20
+      const top = actionId ? 500 + index * 60 : 480
+      const width = actionId ? 600 : 620
+      const height = actionId ? 60 : 460
       return {
         x: left,
         y: top,
@@ -600,9 +599,9 @@ describe('SettingsApp provider deletion', () => {
     fireEvent.keyDown(document, { key: ' ', code: 'Space' })
 
     await waitFor(() => {
-      const enabledZone = document.querySelector<HTMLElement>('[data-action-zone="enabled"]')
+      const actionList = document.querySelector<HTMLElement>('[aria-label="工具栏动作列表"]')
       expect(
-        [...(enabledZone?.querySelectorAll<HTMLElement>('[data-action-id]') ?? [])]
+        [...(actionList?.querySelectorAll<HTMLElement>('[data-action-id]') ?? [])]
           .map((row) => row.dataset.actionId)
       ).toEqual([
         'translate',
@@ -610,6 +609,7 @@ describe('SettingsApp provider deletion', () => {
         'summary',
         'copy',
         'search',
+        'refine',
         'ask-ai'
       ])
     })
@@ -623,9 +623,24 @@ describe('SettingsApp provider deletion', () => {
         { id: 'summary', order: 2 },
         { id: 'copy', order: 3 },
         { id: 'search', order: 4 },
-        { id: 'ask-ai', order: 5 },
-        { id: 'refine', order: 6 }
+        { id: 'refine', order: 5 },
+        { id: 'ask-ai', order: 6 }
       ])
+  })
+
+  it('toggles an action without moving it in the unified list', async () => {
+    installDefaultBridge()
+    render(<SettingsApp />)
+    await goToSettingsSection('动作')
+
+    const list = await screen.findByRole('list', { name: '工具栏动作列表' })
+    const order = () => [...list.querySelectorAll<HTMLElement>('[data-action-id]')]
+      .map((row) => row.dataset.actionId)
+    const before = order()
+    fireEvent.click(screen.getByRole('checkbox', { name: '停用解释' }))
+
+    expect(order()).toEqual(before)
+    expect(screen.getByRole('checkbox', { name: '启用解释' })).not.toBeChecked()
   })
 
   it('shows a non-blocking plaintext warning for HTTP provider addresses', async () => {
@@ -649,6 +664,27 @@ describe('SettingsApp provider deletion', () => {
     fireEvent.change(baseUrl, { target: { value: 'http://api.example.com/v1' } })
     expect(screen.getByText(/API Key 将通过网络明文传输/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()
+  })
+
+  it('keeps collapsed provider drafts and key inputs intact', async () => {
+    installDefaultBridge()
+    render(<SettingsApp />)
+    await goToSettingsSection('服务商')
+
+    const baseUrl = await screen.findByDisplayValue('https://api.openai.com/v1')
+    const keyInput = document.querySelector<HTMLInputElement>('input[type="password"]')!
+    fireEvent.change(baseUrl, { target: { value: 'https://gateway.example/v1' } })
+    fireEvent.change(keyInput, { target: { value: 'sk-unsaved' } })
+
+    fireEvent.click(screen.getByRole('button', { name: '收起服务商 OpenAI Compatible' }))
+    expect(document.querySelector('.provider-grid')).not.toBeVisible()
+    expect(baseUrl).toHaveValue('https://gateway.example/v1')
+    expect(keyInput).toHaveValue('sk-unsaved')
+
+    fireEvent.click(screen.getByRole('button', { name: '展开服务商 OpenAI Compatible' }))
+    expect(baseUrl).toBeVisible()
+    expect(baseUrl).toHaveValue('https://gateway.example/v1')
+    expect(keyInput).toHaveValue('sk-unsaved')
   })
 
   it('edits the persisted result text size through the supported range control', async () => {
@@ -697,7 +733,9 @@ describe('SettingsApp provider deletion', () => {
     fireEvent.change(prompt!, { target: { value: '我的翻译规则：{{text}}' } })
     fireEvent.click(screen.getByRole('button', { name: '保存修改' }))
 
-    expect(screen.getByText('提示词：我的翻译规则：{{text}}')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '编辑翻译' }))
+    expect(document.querySelector<HTMLTextAreaElement>('#action-prompt'))
+      .toHaveValue('我的翻译规则：{{text}}')
   })
 
   it('uses an in-app confirmation and removes providers in the ordinary settings commit', async () => {
@@ -945,7 +983,7 @@ describe('SettingsApp provider deletion', () => {
     expect(input).toHaveAttribute('type', 'text')
   })
 
-  it('shows provider models as vertical reorderable rows without thinking badges', async () => {
+  it('lets each configured model choose which thinking levels it supports', async () => {
     const settingsWithModels: PublicSettings = {
       ...DEFAULT_PUBLIC_SETTINGS,
       providers: DEFAULT_PUBLIC_SETTINGS.providers.map((provider) => ({
@@ -980,9 +1018,13 @@ describe('SettingsApp provider deletion', () => {
     expect(screen.getByText('o3-mini', { selector: '.model-row__name' })).toBeInTheDocument()
     expect(document.querySelector('.model-row-list')).toBeInTheDocument()
 
-    // Provider model list must not show thinking badges
-    expect(screen.queryByText(/思考\s*:/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/思考:\s*低/)).not.toBeInTheDocument()
+    const high = screen.getByRole('checkbox', { name: 'gpt-4o-mini 支持高' })
+    expect(high).not.toBeChecked()
+    fireEvent.click(high)
+    expect(high).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'o3-mini 支持低' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'o3-mini 支持最高' })).not.toBeChecked()
+    expect(screen.queryByRole('combobox', { name: /思考模式/ })).not.toBeInTheDocument()
 
     expect(screen.getAllByRole('button', { name: /拖动模型/ }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('button', { name: /移除模型/ }).length).toBeGreaterThan(0)

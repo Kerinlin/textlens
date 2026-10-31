@@ -20,23 +20,20 @@ export function sortAndNumberActions(actions: readonly ActionDefinition[]): Acti
     .map((action, index) => ({ ...action, order: index }))
 }
 
-export function moveActionToZone(
+export function reorderActions(
   actions: readonly ActionDefinition[],
-  actionId: string,
-  enabled: boolean,
-  targetIndex: number
+  activeId: string,
+  overId: string
 ): ActionDefinition[] {
   const ordered = sortAndNumberActions(actions)
-  const moving = ordered.find((action) => action.id === actionId)
-  if (!moving) return ordered
+  const activeIndex = ordered.findIndex((action) => action.id === activeId)
+  const overIndex = ordered.findIndex((action) => action.id === overId)
+  if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) return ordered
 
-  const enabledItems = ordered.filter((action) => action.enabled && action.id !== actionId)
-  const disabledItems = ordered.filter((action) => !action.enabled && action.id !== actionId)
-  const target = enabled ? enabledItems : disabledItems
-  const index = Math.min(Math.max(0, targetIndex), target.length)
-  target.splice(index, 0, { ...moving, enabled })
-
-  return [...enabledItems, ...disabledItems].map((action, order) => ({ ...action, order }))
+  const moving = ordered[activeIndex]!
+  ordered.splice(activeIndex, 1)
+  ordered.splice(overIndex, 0, moving)
+  return ordered.map((action, order) => ({ ...action, order }))
 }
 
 export function removeProviderFromSettings(

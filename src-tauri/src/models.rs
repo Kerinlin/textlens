@@ -1190,7 +1190,7 @@ impl AppSettings {
                 let model_id = action.model_id.get_or_insert_with(String::new);
                 *provider_id = provider_id.trim().to_owned();
                 *model_id = model_id.trim().to_owned();
-                let mut model_levels: &[ThinkingLevel] = &[];
+                let mut allowed_levels = Vec::new();
                 if provider_id.is_empty() {
                     if !model_id.is_empty() {
                         return Err(format!("动作“{}”设置了模型但未设置服务商", action.name));
@@ -1205,10 +1205,10 @@ impl AppSettings {
                             .iter()
                             .find(|model| model.id == *model_id)
                             .ok_or_else(|| format!("动作“{}”引用了不存在的模型", action.name))?;
-                        model_levels = model.thinking_levels.as_slice();
+                        allowed_levels.extend(model.thinking_levels.iter().copied());
                     }
                 }
-                action.thinking_mode = clamp_thinking_mode(action.thinking_mode, model_levels);
+                action.thinking_mode = clamp_thinking_mode(action.thinking_mode, &allowed_levels);
             } else {
                 action.prompt = None;
                 action.provider_id = None;

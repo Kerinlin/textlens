@@ -199,7 +199,7 @@ TextLens 以 macOS 0.3.16 为功能基线，逐步完成 Windows 10/11 x64 版�
 | 0.3.54 | Windows 划词：allowlist 应用在 `IsPassword` 未知时允许剪贴板回退；WPS/微信/QQ 等进程族 UIA 关联；UIA 无目标时前台 Ctrl+C 路径；短时重试后及时 break。macOS：剪贴板 allowlist 大小写不敏感，拓宽金山/WPS 识别。结果 Markdown：句末单换行段落、中文列表标记与块边界规范化；思考区字号约为结果设置的 0.82 倍。 |
 | 0.3.55 | 服务商 `enabled` 启停；动作模型选择改为按服务商分组的统一 optgroup 列表，并按模型名自动推断思考档位（含「关闭思考」）；翻译目标语言扩展为 zh/en/ja/ko/ru/de/fr，结果标题栏短码切换；默认其他语种→中文、中文→英文；收紧翻译与解释默认提示词。 |
 | 0.3.56 | 修复 macOS 主线程死锁（持 WindowState 锁等待 orderFront 导致托盘无响应）；结果窗关闭前 blur 原生 select；文档改为 DEVELOPMENT_HANDBOOK 开发手册并精简 README。 |
-| 0.4.0 | 双端划词兼容拓宽、AX/UIA 有界捕获、Windows 跨段与长划词回退、工具栏 stage-present 与悬停交互、Markdown 稳定渲染、解释提示词和快捷键注册加固。 |
+| 0.4.0 | 双端划词兼容拓宽、AX/UIA 有界捕获、Windows 跨段与长划词回退、工具栏 stage-present 与悬停交互、Markdown 稳定渲染、解释提示词和快捷键注册加固。服务商模型可勾选支持的思考档位；思考强度仍在动作中选择。 |
 
 跨版本累计完成的其他能力包括：多服务商多模型、自定义动作、HTTP 服务地址、URL/IP 直达、结果窗拖动与尺寸记忆、置顶与多种自动关闭方式、结果正文再次划词、安全 Markdown、模型重试与临时切换。
 
@@ -889,7 +889,7 @@ Windows 安装包使用 current-user 模式，不要求管理员权限；禁止�
 
 （整理日期：2026-08-10）
 
-- **双端划词兼容：** macOS 从 allowlist 扩展为 denylist 与安全输入判断，增加 AX 调用限时、按进程兼容属性缓存和事件监听自愈；Windows 增加 UIA 硬预算、按应用历史自适应路由、前台无障碍树预热，以及 PDF/Office 跨段长划词的 settle、UIA、WM_COPY、Ctrl+C 和空结果重试链路。
+- **双端划词兼容：** macOS 从 allowlist 扩展为 denylist 与安全输入判断，增加 AX 调用限时、按进程兼容属性缓存和事件监听自愈；`AXSelectedText` 在约一段后失败或截断时，改为按 `AXSelectedTextRange` 分块读取 `AXStringForRange`（每块 16,000 UTF-16，全文不超过 100 万字），一般应用不改剪贴板。VSCode / Insiders 的 Monaco 隐藏 textarea 在 500 字策略边界可能只暴露截断镜像；达到边界或 AX 失败但存在文本选区证据时，改用合成 `⌘C` 获取编辑器完整选区，预先物化全部剪贴板格式，仅在 changeCount 仍属于本次复制时恢复，并忽略本次合成键盘事件。Windows 增加 UIA 硬预算、按应用历史自适应路由、前台无障碍树预热，以及 PDF/Office 跨段长划词的 settle、UIA、WM_COPY、Ctrl+C 和空结果重试链路。
 - **捕获稳定性：** 将可能被第三方 UIA/OLE provider 阻塞的 Windows 捕获隔离到 helper 进程，限制超时、重建失效 helper，并处理滚轮、generation、前台窗口和应用族关联，降低长时间运行后划词失效。
 - **工具栏：** 双端采用 stage/present 展示事务，改善首次展示延迟、透明等待、窗口复活和悬停高亮；工具栏动作加入忙态单飞和指针采样反馈。
 - **结果 Markdown：** 流式输出提前复用稳定的 Markdown 渲染路径，统一段落、列表、代码块与公式间距，降低纯文本到 Markdown 切换时的视觉跳变。

@@ -6,9 +6,9 @@ import {
 } from '../../shared'
 import {
   buildSettingsUpdate,
-  moveActionToZone,
   removeProviderModelFromSettings,
   removeProviderFromSettings,
+  reorderActions,
   sortAndNumberActions
 } from './settingsForm'
 
@@ -128,9 +128,9 @@ describe('settings form helpers', () => {
     expect(buildSettingsUpdate({ ...DEFAULT_PUBLIC_SETTINGS, actions }).valid).toBe(true)
   })
 
-  it('reorders within and across the enabled/disabled zones', () => {
-    const moved = moveActionToZone(DEFAULT_PUBLIC_SETTINGS.actions, 'refine', true, 1)
-    expect(moved.filter((action) => action.enabled).map((action) => action.id)).toEqual([
+  it('reorders the unified action list without changing enabled states', () => {
+    const moved = reorderActions(DEFAULT_PUBLIC_SETTINGS.actions, 'refine', 'explain')
+    expect(moved.map((action) => action.id)).toEqual([
       'translate',
       'refine',
       'explain',
@@ -139,7 +139,10 @@ describe('settings form helpers', () => {
       'copy',
       'ask-ai'
     ])
-    expect(moved.find((action) => action.id === 'refine')?.enabled).toBe(true)
+    expect(moved.find((action) => action.id === 'refine')?.enabled).toBe(false)
+    expect(moved.filter((action) => action.enabled).map((action) => action.id)).toEqual(
+      DEFAULT_PUBLIC_SETTINGS.actions.filter((action) => action.enabled).map((action) => action.id)
+    )
   })
 
   it('removes a provider and safely unbinds every AI action that used it', () => {

@@ -1444,6 +1444,9 @@ impl ActionService {
                     control
                 },
                 |thinking| {
+                    if prepared.session_data.route.thinking.mode == ThinkingMode::Off {
+                        return ControlFlow::Continue(());
+                    }
                     let now = tokio::time::Instant::now();
                     self.submit_thinking_control(app, &ticket, thinking, now)
                 },
@@ -1466,6 +1469,9 @@ impl ActionService {
                     control
                 },
                 |thinking| {
+                    if prepared.session_data.route.thinking.mode == ThinkingMode::Off {
+                        return ControlFlow::Continue(());
+                    }
                     let now = tokio::time::Instant::now();
                     let control = self.submit_thinking_control(app, &ticket, thinking, now);
                     if matches!(control, ControlFlow::Continue(())) {

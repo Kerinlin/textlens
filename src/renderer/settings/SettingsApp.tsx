@@ -12,7 +12,6 @@ import {
   KeyboardSensor,
   PointerSensor,
   closestCenter,
-  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -27,6 +26,7 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import {
   Check,
+  ChevronDown,
   CircleAlert,
   Eye,
   EyeOff,
@@ -38,7 +38,6 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   Trash2,
   X
 } from 'lucide-react'
@@ -62,7 +61,10 @@ import {
   type ProviderModel,
   type SettingsGuidance,
   type SupportedLocale,
-  type TranslationLanguage
+  type ThinkingLevel,
+  type TranslationLanguage,
+  THINKING_LEVELS,
+  THINKING_LEVEL_LABELS
 } from '../../shared'
 import { ActionIcon } from '../components/ActionIcon'
 import { runDetached } from '../lib/asyncEffects'
@@ -71,9 +73,9 @@ import { CustomActionDialog, type ActionEditorValue } from './CustomActionDialog
 import { mergeProviderModelsOnPick } from './providerModels'
 import {
   buildSettingsUpdate,
-  moveActionToZone,
   removeProviderModelFromSettings,
   removeProviderFromSettings,
+  reorderActions,
   sortAndNumberActions
 } from './settingsForm'
 import {
@@ -169,15 +171,6 @@ const ACTION_KIND_NAMES: Readonly<Record<ActionDefinition['kind'], string>> = {
   custom: '自定义 AI'
 }
 
-const ACTION_ZONE_IDS = {
-  enabled: 'action-zone-enabled',
-  disabled: 'action-zone-disabled'
-} as const
-
-function actionZoneId(enabled: boolean): string {
-  return enabled ? ACTION_ZONE_IDS.enabled : ACTION_ZONE_IDS.disabled
-}
-
 function createId(prefix: string): string {
   if (typeof crypto.randomUUID === 'function') return `${prefix}-${crypto.randomUUID()}`
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -186,6 +179,13 @@ function createId(prefix: string): string {
 
 function normalizePublicSettings(settings: PublicSettings): PublicSettings {
   return { ...settings, actions: sortAndNumberActions(settings.actions) }
+}
+
+function toggleThinkingLevel(model: ProviderModel, level: ThinkingLevel): ProviderModel {
+  const thinkingLevels = model.thinkingLevels.includes(level)
+    ? model.thinkingLevels.filter((item) => item !== level)
+    : THINKING_LEVELS.filter((item) => item === level || model.thinkingLevels.includes(item))
+  return { ...model, thinkingLevels }
 }
 
 function normalizedModels(models: readonly ProviderModel[]): ProviderModel[] {
@@ -267,6 +267,7 @@ export function SettingsApp(): JSX.Element {
   const [dirty, setDirty] = useState(false)
   const [editor, setEditor] = useState<ActionDefinition | 'new' | null>(null)
   const [providerPendingDelete, setProviderPendingDelete] = useState<PublicProviderSettings | null>(null)
+  const [expandedProviderIds, setExpandedProviderIds] = useState<ReadonlySet<string> | null>(null)
   const [actionPendingDelete, setActionPendingDelete] = useState<ActionDefinition | null>(null)
   const [modelPicker, setModelPicker] = useState<ModelPickerState | null>(null)
   const [quitConfirmationOpen, setQuitConfirmationOpen] = useState(false)
@@ -536,13 +537,13 @@ export function SettingsApp(): JSX.Element {
     setBanner(null)
   }, [])
 
-  const enabledActions = useMemo(
-    () => sortAndNumberActions(draft?.actions ?? []).filter((action) => action.enabled),
+  const orderedActions = useMemo(
+    () => sortAndNumberActions(draft?.actions ?? []),
     [draft?.actions]
   )
-  const disabledActions = useMemo(
-    () => sortAndNumberActions(draft?.actions ?? []).filter((action) => !action.enabled),
-    [draft?.actions]
+  const enabledActions = useMemo(
+    () => orderedActions.filter((action) => action.enabled),
+    [orderedActions]
   )
   const persist = async (): Promise<PublicSettings | null> => {
     if (!draft) return null
@@ -703,6 +704,18 @@ export function SettingsApp(): JSX.Element {
     }
   }
 
+  const providerIsExpanded = (providerId: string): boolean =>
+    expandedProviderIds?.has(providerId) ?? draft?.providers[0]?.id === providerId
+
+  const toggleProviderDetails = (providerId: string): void => {
+    setExpandedProviderIds((current) => {
+      const next = new Set(current ?? (draft?.providers[0]?.id ? [draft.providers[0].id] : []))
+      if (next.has(providerId)) next.delete(providerId)
+      else next.add(providerId)
+      return next
+    })
+  }
+
   const addProvider = (): void => {
     const id = createId('provider')
     const provider: PublicProviderSettings = {
@@ -714,6 +727,11 @@ export function SettingsApp(): JSX.Element {
       models: []
     }
     changeDraft((current) => ({ ...current, providers: [...current.providers, provider] }))
+    setExpandedProviderIds((current) => {
+      const next = new Set(current ?? (draft?.providers[0]?.id ? [draft.providers[0].id] : []))
+      next.add(id)
+      return next
+    })
   }
 
   const changeProvider = (
@@ -738,6 +756,12 @@ export function SettingsApp(): JSX.Element {
     setKeyBaselines((current) => {
       const next = { ...current }
       delete next[provider.id]
+      return next
+    })
+    setExpandedProviderIds((current) => {
+      if (current === null) return null
+      const next = new Set(current)
+      next.delete(provider.id)
       return next
     })
     setProviderPendingDelete(null)
@@ -972,7 +996,7 @@ export function SettingsApp(): JSX.Element {
     setBanner({ kind: 'success', text: `已移除动作“${action.name}”；保存设置后生效` })
   }
 
-  const moveToZone = (actionId: string, enabled: boolean, index: number): void => {
+  const toggleAction = (actionId: string, enabled: boolean): void => {
     if (!draft) return
     const action = draft.actions.find((candidate) => candidate.id === actionId)
     if (!action) return
@@ -986,7 +1010,9 @@ export function SettingsApp(): JSX.Element {
     }
     changeDraft((current) => ({
       ...current,
-      actions: moveActionToZone(current.actions, actionId, enabled, index)
+      actions: sortAndNumberActions(current.actions.map((item) =>
+        item.id === actionId ? { ...item, enabled } : item
+      ))
     }))
   }
 
@@ -1000,24 +1026,21 @@ export function SettingsApp(): JSX.Element {
 
     const actionId = String(event.active.id)
     const overId = String(event.over.id)
-    if (overId === ACTION_ZONE_IDS.enabled || overId === ACTION_ZONE_IDS.disabled) {
-      const enabled = overId === ACTION_ZONE_IDS.enabled
-      const targetLength = enabled ? enabledActions.length : disabledActions.length
-      moveToZone(actionId, enabled, targetLength)
-      return
-    }
-
-    const overAction = draft.actions.find((action) => action.id === overId)
-    if (!overAction) return
-    const targetActions = overAction.enabled ? enabledActions : disabledActions
-    const targetIndex = targetActions.findIndex((action) => action.id === overAction.id)
-    if (targetIndex >= 0) moveToZone(actionId, overAction.enabled, targetIndex)
+    if (actionId === overId) return
+    changeDraft((current) => ({
+      ...current,
+      actions: reorderActions(current.actions, actionId, overId)
+    }))
   }
 
   if (!draft) {
     return (
-      <main className="settings-loading">
-        <LoaderCircle className="settings-spin" size={24} aria-hidden="true" />
+      <main className="settings-loading" aria-busy="true">
+        <span className="skeleton-stack" aria-hidden="true">
+          <span className="skeleton skeleton--line" />
+          <span className="skeleton skeleton--line" />
+          <span className="skeleton skeleton--line skeleton--line-short" />
+        </span>
         <span>正在载入设置…</span>
         {banner?.kind === 'error' && <div className="notice notice--error">{banner.text}</div>}
       </main>
@@ -1034,11 +1057,7 @@ export function SettingsApp(): JSX.Element {
     <main className="settings-page settings-page--shell">
       <aside className="settings-shell__nav">
         <header className="settings-hero">
-          <div className="settings-logo" aria-hidden="true"><Sparkles size={22} /></div>
-          <div>
-            <h1>{APP_NAME} 设置</h1>
-            <p>划词后快速复制、搜索或交给 AI。</p>
-          </div>
+          <h1>{APP_NAME}</h1>
         </header>
         <nav className="settings-nav" aria-label="设置分区">
           {SETTINGS_SECTIONS.map((section) => (
@@ -1077,13 +1096,6 @@ export function SettingsApp(): JSX.Element {
                     <h2 id="general-title">{activeMeta.label}</h2>
                     <p>{activeMeta.blurb}</p>
                   </div>
-                </div>
-                <div className="settings-tip" role="note">
-                  <span className="settings-tip__label">使用提示</span>
-                  <p>
-                    推荐先保持「划词后」触发；若与其他软件冲突，可改用快捷键。改完后点右下角
-                    <strong>保存设置</strong>才会生效。
-                  </p>
                 </div>
                 <div className="settings-card settings-card--rows">
                   <SettingSwitch
@@ -1220,30 +1232,37 @@ export function SettingsApp(): JSX.Element {
           )}
 
           {activeSection === 'providers' && (
-          <section className="settings-section settings-section--enter" aria-labelledby="providers-title">
+          <section className="settings-section settings-section--providers settings-section--enter" aria-labelledby="providers-title">
         <div className="section-heading section-heading--actions">
           <div><h2 id="providers-title">AI 服务商与模型</h2><p>{activeMeta.blurb}</p></div>
           <button className="button" type="button" onClick={addProvider}><Plus size={15} />添加服务商</button>
         </div>
-        <div className="settings-tip" role="note">
-          <span className="settings-tip__label">配置顺序</span>
-          <ol className="settings-tip__steps">
-            <li>填写 API 地址与 Key</li>
-            <li>测试连接确认可用</li>
-            <li>获取模型并勾选常用项</li>
-            <li>保存设置，再到「动作」里绑定模型</li>
-          </ol>
-        </div>
         <div className="provider-stack">
           {draft.providers.map((provider) => (
             <article
-              className={`settings-card provider-card ${provider.enabled === false ? 'provider-card--disabled' : ''}`}
+              className={`settings-card provider-card ${provider.enabled === false ? 'provider-card--disabled' : ''} ${providerIsExpanded(provider.id) ? 'provider-card--expanded' : ''}`}
               key={provider.id}
             >
               <header className="provider-card__header">
-                <div className="provider-card__identity"><span className="provider-avatar"><Sparkles size={17} /></span>
+                <button
+                  className="icon-button provider-card__expand"
+                  type="button"
+                  aria-label={`${providerIsExpanded(provider.id) ? '收起' : '展开'}服务商 ${provider.name}`}
+                  aria-expanded={providerIsExpanded(provider.id)}
+                  aria-controls={`provider-details-${provider.id}`}
+                  onClick={() => toggleProviderDetails(provider.id)}
+                >
+                  <ChevronDown size={16} aria-hidden="true" />
+                </button>
+                <div className="provider-card__identity">
                   <input className="provider-name-input" value={provider.name} maxLength={80} aria-label="服务商名称"
-                    onChange={(event) => changeProvider(provider.id, (current) => ({ ...current, name: event.target.value }))} /></div>
+                    onChange={(event) => changeProvider(provider.id, (current) => ({ ...current, name: event.target.value }))} />
+                  {!providerIsExpanded(provider.id) && (
+                    <span className="provider-card__summary">
+                      {provider.models.length} 个模型 · {provider.keyConfigured ? '密钥已配置' : '密钥未配置'}
+                    </span>
+                  )}
+                </div>
                 <div className="provider-card__header-actions">
                   <label className="provider-enabled-toggle" title={provider.enabled === false ? '已关闭：动作与结果中不显示其模型' : '已启用'}>
                     <span className="provider-enabled-toggle__label">
@@ -1264,7 +1283,11 @@ export function SettingsApp(): JSX.Element {
                     onClick={() => setProviderPendingDelete(provider)}><Trash2 size={16} /></button>
                 </div>
               </header>
-              <div className="provider-grid">
+              <div
+                className={`provider-grid ${providerIsExpanded(provider.id) ? 'provider-grid--open' : ''}`}
+                id={`provider-details-${provider.id}`}
+                hidden={!providerIsExpanded(provider.id)}
+              >
                 <label className="field field--wide"><span className="field__label">API 地址（HTTP / HTTPS）</span>
                   <input className="control" type="url" value={provider.baseUrl} spellCheck={false}
                     placeholder="https://api.example.com/v1 或 http://localhost:11434/v1"
@@ -1315,7 +1338,7 @@ export function SettingsApp(): JSX.Element {
                   <button className="button button--danger" type="button" disabled={busy || !provider.keyConfigured}
                     onClick={() => void clearProviderKey(provider)}>清除密钥</button>
                 </div>
-                <div className="field field--wide"><span className="field__label">模型（{provider.models.length}）</span>
+                <div className="field field--wide provider-models"><span className="field__label">模型（{provider.models.length}）</span>
                   <div className="model-add-row"><input className="control" value={newModelInputs[provider.id] ?? ''}
                     placeholder="手动添加模型 ID" spellCheck={false}
                     onChange={(event) => setNewModelInputs((current) => ({ ...current, [provider.id]: event.target.value }))}
@@ -1343,6 +1366,14 @@ export function SettingsApp(): JSX.Element {
                             key={model.id}
                             model={model}
                             dragging={draggingModelId === model.id}
+                            onToggleLevel={(level) => changeProvider(provider.id, (current) => ({
+                              ...current,
+                              models: current.models.map((candidate) =>
+                                candidate.id === model.id
+                                  ? toggleThinkingLevel(candidate, level)
+                                  : candidate
+                              )
+                            }))}
                             onRemove={() => changeDraft((current) =>
                               removeProviderModelFromSettings(current, provider.id, model.id)
                             )}
@@ -1382,9 +1413,12 @@ export function SettingsApp(): JSX.Element {
           </button>
         </div>
         <div className="settings-card toolbar-preview-card">
-          <span className="toolbar-preview-label">实时预览</span>
+          <div className="toolbar-preview__heading">
+            <span className="toolbar-preview-label">工具栏预览</span>
+            <span>{enabledActions.length} / {MAX_ENABLED_ACTIONS} 个动作已显示</span>
+          </div>
           <div className={`toolbar-preview ${draft.toolbar.displayMode === 'icon-only' ? 'toolbar-preview--icons' : ''}`}>
-            <span className="toolbar-preview__logo"><Sparkles size={14} /></span>
+            <span className="toolbar-preview__logo" aria-hidden="true" />
             {enabledActions.map((action) => <span className="toolbar-preview__action" key={action.id} title={action.name}>
               <ActionIcon name={action.icon} size={14} />{draft.toolbar.displayMode !== 'icon-only' && <span>{action.name}</span>}</span>)}
           </div>
@@ -1397,14 +1431,19 @@ export function SettingsApp(): JSX.Element {
           onDragCancel={() => setDraggingId(null)}
           onDragEnd={handleDragEnd}
         >
-          <div className="action-zones">
-            <ActionZone title="显示在工具栏" count={`${enabledActions.length} / ${MAX_ENABLED_ACTIONS}`} actions={enabledActions}
-              enabled draggingId={draggingId}
-              onEdit={setEditor} onDelete={removeAction} onToggle={(action) => moveToZone(action.id, false, disabledActions.length)} />
-            <ActionZone title="未显示" count={`${disabledActions.length}`} actions={disabledActions}
-              enabled={false} draggingId={draggingId}
-              onEdit={setEditor} onDelete={removeAction} onToggle={(action) => moveToZone(action.id, true, enabledActions.length)} />
-          </div>
+          <SortableContext items={orderedActions.map((action) => action.id)} strategy={verticalListSortingStrategy}>
+            <div className="action-list action-list--sortable" role="list" aria-label="工具栏动作列表">
+              {orderedActions.map((action) => <SortableActionRow
+                key={action.id}
+                action={action}
+                enabled={action.enabled}
+                dragging={draggingId === action.id}
+                onEdit={setEditor}
+                onDelete={removeAction}
+                onToggle={(item) => toggleAction(item.id, !item.enabled)}
+              />)}
+            </div>
+          </SortableContext>
         </DndContext>
       </section>
           )}
@@ -1668,7 +1707,7 @@ export function SettingsApp(): JSX.Element {
             )}
           </span>
           <button
-            className="button button--primary settings-save"
+            className={`button settings-save ${dirty || keysDirty ? 'button--primary' : ''}`}
             type="button"
             disabled={busy}
             onClick={() => void save()}
@@ -1876,45 +1915,10 @@ function SettingSwitch({ title, description, checked, onChange, extra }: {
       onChange={(event) => onChange(event.target.checked)} /><span aria-hidden="true" /><span className="sr-only">{title}</span></label></div></div>
 }
 
-function ActionZone({ title, count, actions, enabled, draggingId, onEdit, onDelete, onToggle }: {
-  title: string
-  count: string
-  actions: readonly ActionDefinition[]
-  enabled: boolean
-  draggingId: string | null
-  onEdit: (action: ActionDefinition) => void
-  onDelete: (action: ActionDefinition) => void
-  onToggle: (action: ActionDefinition) => void
-}): JSX.Element {
-  const { isOver, setNodeRef } = useDroppable({ id: actionZoneId(enabled) })
-
-  return <div
-    ref={setNodeRef}
-    className={`action-zone ${enabled ? 'action-zone--enabled' : ''} ${isOver ? 'is-drag-over' : ''}`}
-    data-action-zone={enabled ? 'enabled' : 'disabled'}
-  >
-    <header className="action-zone__header"><strong>{title}</strong><span>{count}</span></header>
-    <SortableContext items={actions.map((action) => action.id)} strategy={verticalListSortingStrategy}>
-      <div className="action-zone__list">
-        {actions.map((action) => <SortableActionRow
-          key={action.id}
-          action={action}
-          enabled={enabled}
-          dragging={draggingId === action.id}
-          onEdit={onEdit}
-          onDelete={onDelete}
-          onToggle={onToggle}
-        />)}
-        {actions.length === 0 && <div className="action-zone__empty">拖动动作到这里</div>}
-      </div>
-    </SortableContext>
-  </div>
-}
-
-
-function SortableModelRow({ model, dragging, onRemove }: {
+function SortableModelRow({ model, dragging, onToggleLevel, onRemove }: {
   model: ProviderModel
   dragging: boolean
+  onToggleLevel: (level: ThinkingLevel) => void
   onRemove: () => void
 }): JSX.Element {
   const {
@@ -1954,6 +1958,19 @@ function SortableModelRow({ model, dragging, onRemove }: {
       <div className="model-row__body">
         <span className="model-row__name">{model.name}</span>
         {showId && <span className="model-row__id">{model.id}</span>}
+      </div>
+      <div className="model-row__levels" role="group" aria-label={`${model.name} 支持的思考档位`}>
+        {THINKING_LEVELS.map((level) => (
+          <label key={level} className="model-level" title={`${model.name} 支持${THINKING_LEVEL_LABELS[level]}`}>
+            <input
+              type="checkbox"
+              checked={model.thinkingLevels.includes(level)}
+              aria-label={`${model.name} 支持${THINKING_LEVEL_LABELS[level]}`}
+              onChange={() => onToggleLevel(level)}
+            />
+            <span>{THINKING_LEVEL_LABELS[level]}</span>
+          </label>
+        ))}
       </div>
       <button
         type="button"
@@ -2118,7 +2135,7 @@ function SortableActionRow({ action, enabled, dragging, onEdit, onDelete, onTogg
     setNodeRef,
     transform,
     transition
-  } = useSortable({ id: action.id, data: { enabled } })
+  } = useSortable({ id: action.id })
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition
@@ -2129,6 +2146,7 @@ function SortableActionRow({ action, enabled, dragging, onEdit, onDelete, onTogg
     style={style}
     className={`action-dnd-row ${dragging || isDragging ? 'is-dragging' : ''}`}
     data-action-id={action.id}
+    role="listitem"
   >
         <button
           ref={setActivatorNodeRef}
@@ -2152,11 +2170,6 @@ function SortableActionRow({ action, enabled, dragging, onEdit, onDelete, onTogg
                 ? ` · ${action.modelId || '未选择模型'}`
                 : ''}
           </span>
-          {isAiActionDefinition(action) && (
-            <span className="action-row__prompt" title={action.prompt}>
-              提示词：{action.prompt}
-            </span>
-          )}
         </div>
         <div className="action-row__controls">
           <button className="icon-button" type="button" title="编辑" aria-label={`编辑${action.name}`} onClick={() => onEdit(action)}><Pencil size={15} /></button>

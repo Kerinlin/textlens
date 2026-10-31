@@ -45,7 +45,7 @@ Enhancements beyond a basic selection assistant:
 - **Header model switch & regenerate:** Switch models by provider group and regenerate in the same window; translation targets include CN/EN/JA/KO/RU/DE/FR.
 - **Multilingual translation:** Auto-detect source language; default other languages → Chinese, Chinese → English; primary/backup language pairs are configurable.
 - **Ask AI sessions:** Open a result window with selection as context; you can wait before the first model call, then chat multi-turn in that window only.
-- **Thinking & streaming:** Streaming thinking / reasoning display; thinking levels inferred from model names (including “off”); low-latency streaming.
+- **Thinking & streaming:** Streaming thinking / reasoning display; models declare which thinking levels they support, and each action chooses the intensity (including “off”); low-latency streaming.
 - **Provider enable/disable:** Disabled providers are hidden from action binding and result model lists (already-bound actions still run).
 - **Lightweight & private:** Standalone Tauri tool; API keys encrypted locally; no selection history; text is sent only when you click an AI action.
 

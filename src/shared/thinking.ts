@@ -76,8 +76,8 @@ export function thinkingModeLabel(mode: ThinkingMode): string {
 }
 
 /**
- * Levels to offer in the action model picker: prefer stored metadata, else
- * infer from the model id so thinking models still show intensity controls.
+ * Levels to offer in the action editor. Configured model levels win; an empty
+ * list falls back to the model-id heuristic so existing models keep working.
  */
 export function effectiveThinkingLevels(
   modelId: string,

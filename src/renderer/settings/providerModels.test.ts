@@ -76,6 +76,38 @@ describe('mergeProviderModelsOnPick', () => {
     ])
   })
 
+  it('keeps user-configured thinking levels unless the provider published explicit levels', () => {
+    const previous = [
+      model('gpt', 'Old Name', {
+        thinkingLevels: ['high'],
+        thinkingCapability: CAP_NONE
+      })
+    ]
+    const silentRemote = [
+      model('gpt', 'GPT-4o', {
+        thinkingLevels: ['low', 'medium'],
+        thinkingCapability: CAP_NONE
+      })
+    ]
+    const explicitRemote = [
+      model('gpt', 'GPT-4o', {
+        thinkingLevels: ['low'],
+        thinkingCapability: CAP_NATIVE
+      })
+    ]
+
+    expect(mergeProviderModelsOnPick({
+      previous,
+      remote: silentRemote,
+      checkedIds: ['gpt']
+    })[0]?.thinkingLevels).toEqual(['high'])
+    expect(mergeProviderModelsOnPick({
+      previous,
+      remote: explicitRemote,
+      checkedIds: ['gpt']
+    })[0]?.thinkingLevels).toEqual(['low'])
+  })
+
   it('keeps manual-only previous metadata when still checked and absent from remote', () => {
     const previous = [
       model('manual-1', 'Manual Model', {

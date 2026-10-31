@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -57,6 +58,39 @@ constexpr float kAXGeometryMessagingTimeoutSeconds = 0.03f;
 // responds to individual AX requests but exposes a deep, sparse tree.
 constexpr uint64_t kAXCaptureBudgetMs = 260;
 constexpr uint64_t kDocumentAXCaptureBudgetMs = 300;
+// WebKit/Chromium often fail or truncate AXSelectedText around one paragraph.
+// Parameterized AXStringForRange still returns the real selection, so long
+// reads are chunked instead of rejected. 16k stays inside one AX round-trip;
+// the shared runtime cap remains 1_000_000 scalars.
+constexpr CFIndex kAXStringForRangeChunkLength = 16'000;
+constexpr CFIndex kAXSelectedTextMaximumLength = 1'000'000;
+// Some editors publish only a bounded accessibility mirror. Monaco's unit is
+// 500 characters; other hosts truncate around a paragraph. The copy command is
+// the generic fallback, so it is not tied to an application id. Electron often
+// needs longer than one AX round-trip to publish that copy.
+constexpr uint64_t kClipboardCaptureBudgetMs = 450;
+constexpr NSUInteger kAccessibilityMirrorBoundary = 500;
+// WeChat's custom chat canvas may expose no AX selection. Keep its legacy
+// clipboard fallback bounded and cancellable like the editor-specific path.
+constexpr uint64_t kWeChatClipboardCaptureBudgetMs = 500;
+constexpr NSUInteger kMaximumClipboardBackupBytes = 64 * 1024 * 1024;
+constexpr int64_t kSyntheticCopyEventMarker = 0x544C434F5059; // "TLCOPY"
+// The copy probe is a real key event. While it is in flight, the listen-only
+// tap must not treat it as user input: keyDown otherwise cancels the capture
+// waiting for the editor to publish the selection. The event-source field is
+// not reliable across HID re-injection, so the in-flight count is the gate.
+std::atomic<uint32_t> gSyntheticCopyPosts{0};
+
+struct SyntheticCopyGuard {
+    SyntheticCopyGuard() {
+        gSyntheticCopyPosts.fetch_add(1, std::memory_order_acq_rel);
+    }
+    ~SyntheticCopyGuard() {
+        gSyntheticCopyPosts.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    SyntheticCopyGuard(const SyntheticCopyGuard &) = delete;
+    SyntheticCopyGuard &operator=(const SyntheticCopyGuard &) = delete;
+};
 constexpr uint64_t kAXCompatibilityRetryDelayMs = 28;
 constexpr uint64_t kAXLateSelectionRetryDelayMs = 24;
 // Proactive self-healing check for the event tap, mirroring Windows' hook
@@ -75,6 +109,7 @@ enum class Trigger {
 
 enum class SelectionMethod {
     Accessibility,
+    Clipboard,
 };
 
 struct SelectionInfo {
@@ -105,6 +140,9 @@ struct SelectionInfo {
     CGPoint mouseStart = CGPointZero;
     CGPoint mouseEnd = CGPointZero;
     CGPoint mouseCurrent = CGPointZero;
+    // UTF-16 length reported by AXSelectedTextRange. Zero when the provider
+    // does not expose a range. Used only to detect a truncated mirror.
+    CFIndex selectedRangeLength = 0;
 };
 
 enum class TaskKind {
@@ -171,6 +209,28 @@ static void TraceSelectionTiming(const char *stage, uint64_t durationMs) {
             "[selection-timing] stage=%s duration_ms=%llu\n",
             stage,
             static_cast<unsigned long long>(durationMs));
+    }
+}
+
+// Decision-level trace for the capture pipeline. Unlike the timing trace this
+// also appends to a fixed file so a dev-server terminal that scrolled away or
+// a detached launch does not lose the evidence.
+static void TraceDecision(const char *format, ...) {
+    if (!SelectionTimingEnabled()) {
+        return;
+    }
+    char line[1024];
+    va_list args;
+    va_start(args, format);
+    const int written = std::vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    if (written <= 0) {
+        return;
+    }
+    std::fprintf(stderr, "[selection-trace] %s\n", line);
+    if (FILE *file = std::fopen("/tmp/textlens_selection_trace.log", "a")) {
+        std::fprintf(file, "[selection-trace] %s\n", line);
+        std::fclose(file);
     }
 }
 
@@ -327,9 +387,115 @@ static bool ReadSelectionBounds(
     return info.hasBounds;
 }
 
+static bool ReadStringForRange(
+    AXUIElementRef element,
+    CFRange range,
+    std::string &text,
+    const AccessibilityReadContext &context) {
+    if (element == nullptr || !context.IsCurrent() || range.location < 0 || range.length <= 0) {
+        return false;
+    }
+    AXValueRef rangeValue = AXValueCreate(kAXValueTypeCFRange, &range);
+    if (rangeValue == nullptr) {
+        return false;
+    }
+    CFTypeRef value = nullptr;
+    AXError error = context.IsCurrent()
+        ? AXUIElementCopyParameterizedAttributeValue(
+              element,
+              kAXStringForRangeParameterizedAttribute,
+              rangeValue,
+              &value)
+        : kAXErrorFailure;
+    CFRelease(rangeValue);
+    if (error != kAXErrorSuccess || value == nullptr) {
+        return false;
+    }
+    bool success = false;
+    if (CFGetTypeID(value) == CFStringGetTypeID()) {
+        success = StringFromCFString(static_cast<CFStringRef>(value), text) && !text.empty();
+    }
+    CFRelease(value);
+    return success && context.IsCurrent();
+}
+
+// AXSelectedText is commonly empty or truncated once a selection passes about
+// one paragraph. The selected range plus AXStringForRange still covers article
+// length. Chunk so one parameterized call cannot stall the capture worker, and
+// stop at the same scalar cap the runtime uses to hide the toolbar.
+static bool ReadSelectedTextByRange(
+    AXUIElementRef element,
+    std::string &text,
+    const AccessibilityReadContext &context) {
+    if (element == nullptr || !context.IsCurrent()) {
+        return false;
+    }
+    AXValueRef rangeValue = nullptr;
+    AXError error = AXUIElementCopyAttributeValue(
+        element,
+        kAXSelectedTextRangeAttribute,
+        reinterpret_cast<CFTypeRef *>(&rangeValue));
+    if (error != kAXErrorSuccess || rangeValue == nullptr) {
+        return false;
+    }
+    CFRange range = CFRangeMake(0, 0);
+    bool hasRange = AXValueGetValue(rangeValue, kAXValueTypeCFRange, &range) &&
+        range.location >= 0 && range.length > 0 &&
+        range.length <= std::numeric_limits<CFIndex>::max() - range.location;
+    CFRelease(rangeValue);
+    if (!hasRange) {
+        return false;
+    }
+    // Above the shared runtime cap the toolbar is hidden anyway. Reading it
+    // would only burn the capture budget on a selection we cannot present.
+    if (range.length > kAXSelectedTextMaximumLength) {
+        return false;
+    }
+
+    std::string assembled;
+    assembled.reserve(static_cast<size_t>(std::min(range.length, kAXStringForRangeChunkLength)));
+    CFIndex offset = 0;
+    while (offset < range.length && context.IsCurrent()) {
+        CFIndex chunkLength = std::min(kAXStringForRangeChunkLength, range.length - offset);
+        std::string chunk;
+        if (!ReadStringForRange(
+                element,
+                CFRangeMake(range.location + offset, chunkLength),
+                chunk,
+                context)) {
+            // A provider that answers the first chunk and then times out still
+            // has a usable article prefix. Dropping it would hide the toolbar
+            // for the same selection AXSelectedText already refused.
+            break;
+        }
+        assembled.append(chunk);
+        offset += chunkLength;
+    }
+    if (IsBlank(assembled)) {
+        return false;
+    }
+    text = std::move(assembled);
+    return true;
+}
+
+static bool SelectedTextLooksTruncated(const std::string &text, CFIndex rangeLength) {
+    if (rangeLength <= 0 || text.empty()) {
+        return false;
+    }
+    NSString *string = NSStringFromString(text);
+    if (string == nil) {
+        return true;
+    }
+    // A short explicit selection can be longer in UTF-16 than the AX string
+    // when the provider inserts nothing. Only treat a large deficit as the
+    // known paragraph-length AXSelectedText truncation.
+    return rangeLength >= 400 && string.length + 32 < static_cast<NSUInteger>(rangeLength);
+}
+
 static bool ReadSelectedText(
     AXUIElementRef element,
     std::string &text,
+    CFIndex &selectedRangeLength,
     const AccessibilityReadContext &context) {
     if (element == nullptr || !context.IsCurrent()) {
         return false;
@@ -339,13 +505,61 @@ static bool ReadSelectedText(
 
     CFTypeRef selectedValue = nullptr;
     AXError error = AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute, &selectedValue);
-    if (error == kAXErrorSuccess && selectedValue != nullptr) {
-        bool success = CFGetTypeID(selectedValue) == CFStringGetTypeID() &&
-            StringFromCFString(static_cast<CFStringRef>(selectedValue), text) && !IsBlank(text);
+    std::string selectedText;
+    bool selectedTextUsable = false;
+    if (error == kAXErrorSuccess && selectedValue != nullptr &&
+        CFGetTypeID(selectedValue) == CFStringGetTypeID()) {
+        selectedTextUsable = StringFromCFString(static_cast<CFStringRef>(selectedValue), selectedText) &&
+            !IsBlank(selectedText);
+    }
+    if (selectedValue != nullptr) {
         CFRelease(selectedValue);
-        if (success) {
+    }
+
+    // Short selections are the common path. Trust AXSelectedText and skip the
+    // extra range probe unless this string is already long enough to be the
+    // known paragraph-length truncation.
+    if (selectedTextUsable) {
+        NSString *selected = NSStringFromString(selectedText);
+        if (selected != nil && selected.length < 400) {
+            text = std::move(selectedText);
             return true;
         }
+    }
+
+    selectedRangeLength = 0;
+    bool hasSelectedRangeLength = false;
+    if (context.IsCurrent()) {
+        AXValueRef selectedRangeValue = nullptr;
+        if (AXUIElementCopyAttributeValue(
+                element,
+                kAXSelectedTextRangeAttribute,
+                reinterpret_cast<CFTypeRef *>(&selectedRangeValue)) == kAXErrorSuccess &&
+            selectedRangeValue != nullptr) {
+            CFRange selectedRange = CFRangeMake(0, 0);
+            hasSelectedRangeLength = AXValueGetValue(
+                                         selectedRangeValue,
+                                         kAXValueTypeCFRange,
+                                         &selectedRange) &&
+                selectedRange.length > 0;
+            selectedRangeLength = selectedRange.length;
+            CFRelease(selectedRangeValue);
+        }
+    }
+
+    if (selectedTextUsable &&
+        !(hasSelectedRangeLength &&
+          SelectedTextLooksTruncated(selectedText, selectedRangeLength))) {
+        text = std::move(selectedText);
+        return true;
+    }
+
+    if (context.IsCurrent() && ReadSelectedTextByRange(element, text, context)) {
+        return true;
+    }
+    if (selectedTextUsable) {
+        text = std::move(selectedText);
+        return true;
     }
 
     if (!context.IsCurrent()) {
@@ -514,13 +728,15 @@ static bool ReadValidatedSelectedText(
     SelectionInfo &info,
     const AccessibilityReadContext &context) {
     std::string text;
-    if (!ReadSelectedText(element, text, context)) {
+    CFIndex selectedRangeLength = 0;
+    if (!ReadSelectedText(element, text, selectedRangeLength, context)) {
         return false;
     }
 
     SelectionInfo candidate = info;
     ClearSelectionGeometry(candidate);
     candidate.text = std::move(text);
+    candidate.selectedRangeLength = selectedRangeLength;
     ReadSelectionBounds(element, candidate, context);
     if (!SelectionCandidateMatchesInput(candidate)) {
         return false;
@@ -944,6 +1160,282 @@ static bool IsDocumentOrOfficeSelectionApplication(
         normalizedAppName.find("libreoffice") != std::string::npos;
 }
 
+static bool IsWeChatSelectionApplication(const std::string &bundleId) {
+    return LowercaseAscii(bundleId) == "com.tencent.xinwechat";
+}
+
+static bool TextHasTruncationMarker(const std::string &text) {
+    NSString *string = NSStringFromString(text);
+    if (string == nil || string.length < kAccessibilityMirrorBoundary) {
+        return false;
+    }
+    if (string.length == (kAccessibilityMirrorBoundary * 2) + 1 &&
+        [string characterAtIndex:kAccessibilityMirrorBoundary] == 0x2026) {
+        return true;
+    }
+    unichar last = [string characterAtIndex:string.length - 1];
+    if (last == 0x2026 || last == 0x22EF) {
+        return true;
+    }
+    return string.length >= 3 &&
+        [[string substringFromIndex:string.length - 3] isEqualToString:@"..."];
+}
+
+static bool AccessibilityMirrorReachesBoundary(const std::string &text) {
+    NSString *string = NSStringFromString(text);
+    return string != nil && string.length >= kAccessibilityMirrorBoundary;
+}
+
+static bool SelectedRangeExceedsText(const std::string &text, CFIndex rangeLength) {
+    NSString *string = NSStringFromString(text);
+    return string != nil && rangeLength > 0 &&
+        static_cast<NSUInteger>(rangeLength) > string.length + 8;
+}
+
+static bool HasTruncatedAccessibilityMirror(const std::string &text) {
+    return TextHasTruncationMarker(text) || AccessibilityMirrorReachesBoundary(text);
+}
+
+static bool HasFocusedTextSelection(
+    NSRunningApplication *application,
+    const AccessibilityReadContext &context) {
+    if (application == nil || !context.IsCurrent()) {
+        return false;
+    }
+    AXUIElementRef applicationElement = AXUIElementCreateApplication(application.processIdentifier);
+    if (applicationElement == nullptr) {
+        return false;
+    }
+    ConfigureAccessibilityElement(applicationElement);
+    AXUIElementRef focused = CopyFocusedElement(applicationElement);
+    CFRelease(applicationElement);
+    if (focused == nullptr) {
+        return false;
+    }
+    ConfigureAccessibilityElement(focused);
+    if (ElementIsProtected(focused, context)) {
+        CFRelease(focused);
+        return false;
+    }
+
+    bool hasSelection = false;
+    CFTypeRef selectedValue = nullptr;
+    if (AXUIElementCopyAttributeValue(focused, kAXSelectedTextAttribute, &selectedValue) ==
+            kAXErrorSuccess &&
+        selectedValue != nullptr && CFGetTypeID(selectedValue) == CFStringGetTypeID()) {
+        std::string selectedText;
+        hasSelection = StringFromCFString(static_cast<CFStringRef>(selectedValue), selectedText) &&
+            !IsBlank(selectedText);
+    }
+    if (selectedValue != nullptr) {
+        CFRelease(selectedValue);
+    }
+
+    if (!hasSelection && context.IsCurrent()) {
+        AXValueRef rangeValue = nullptr;
+        if (AXUIElementCopyAttributeValue(
+                focused,
+                kAXSelectedTextRangeAttribute,
+                reinterpret_cast<CFTypeRef *>(&rangeValue)) == kAXErrorSuccess &&
+            rangeValue != nullptr) {
+            CFRange range = CFRangeMake(0, 0);
+            hasSelection = AXValueGetValue(rangeValue, kAXValueTypeCFRange, &range) &&
+                range.location >= 0 && range.length > 0;
+        }
+        if (rangeValue != nullptr) {
+            CFRelease(rangeValue);
+        }
+    }
+    CFRelease(focused);
+    return hasSelection && context.IsCurrent();
+}
+
+static bool FocusedElementIsProtected(
+    NSRunningApplication *application,
+    const AccessibilityReadContext &context) {
+    if (application == nil || !context.IsCurrent()) {
+        return true;
+    }
+    AXUIElementRef applicationElement = AXUIElementCreateApplication(application.processIdentifier);
+    if (applicationElement == nullptr) {
+        return true;
+    }
+    ConfigureAccessibilityElement(applicationElement);
+    AXUIElementRef focused = CopyFocusedElement(applicationElement);
+    CFRelease(applicationElement);
+    if (focused == nullptr) {
+        // Custom-rendered document canvases often have no focused text element.
+        return false;
+    }
+    ConfigureAccessibilityElement(focused);
+    const bool isProtected = ElementIsProtected(focused, context);
+    CFRelease(focused);
+    return isProtected;
+}
+
+static bool RestoreClipboardBackup(
+    NSPasteboard *pasteboard,
+    NSArray<NSPasteboardItem *> *backup,
+    NSInteger expectedChangeCount) {
+    if (pasteboard == nil || backup == nil ||
+        pasteboard.changeCount != expectedChangeCount) {
+        return false;
+    }
+    [pasteboard prepareForNewContentsWithOptions:NSPasteboardContentsCurrentHostOnly];
+    return backup.count == 0 || [pasteboard writeObjects:backup];
+}
+
+static bool ReadSelectionViaClipboard(
+    NSRunningApplication *application,
+    bool hasAccessibilitySelection,
+    const std::string &accessibilityText,
+    bool requireFocusedSelectionEvidence,
+    std::string &text,
+    const AccessibilityReadContext &context) {
+    if (application == nil || !context.IsCurrent()) {
+        TraceDecision("copy: reject nil-app=%d ctxCurrent=%d",
+            application == nil ? 1 : 0,
+            context.IsCurrent() ? 1 : 0);
+        return false;
+    }
+    if (requireFocusedSelectionEvidence) {
+        if (!hasAccessibilitySelection && !HasFocusedTextSelection(application, context)) {
+            TraceDecision("copy: reject no-selection-evidence");
+            return false;
+        }
+    } else if (FocusedElementIsProtected(application, context)) {
+        TraceDecision("copy: reject protected");
+        return false;
+    }
+    NSRunningApplication *frontmost = FrontmostApplication();
+    if (frontmost == nil || frontmost.processIdentifier != application.processIdentifier) {
+        TraceDecision("copy: reject frontmost-mismatch");
+        return false;
+    }
+
+    @autoreleasepool {
+        NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+        const NSInteger originalChangeCount = pasteboard.changeCount;
+        NSArray<NSPasteboardItem *> *originalItems = pasteboard.pasteboardItems;
+        NSMutableArray<NSPasteboardItem *> *backup = [NSMutableArray array];
+        NSUInteger backupBytes = 0;
+
+        // Materialize every representation before copying. If any promised data
+        // cannot be read, abort rather than destroying an incomplete backup.
+        for (NSPasteboardItem *item in originalItems) {
+            NSPasteboardItem *itemCopy = [[NSPasteboardItem alloc] init];
+            for (NSPasteboardType type in item.types) {
+                NSData *data = [item dataForType:type];
+                if (data == nil || data.length > kMaximumClipboardBackupBytes - backupBytes) {
+                    TraceDecision("copy: reject backup-unreadable");
+                    return false;
+                }
+                backupBytes += data.length;
+                [itemCopy setData:data forType:type];
+            }
+            [backup addObject:itemCopy];
+        }
+        if (!context.IsCurrent() || pasteboard.changeCount != originalChangeCount) {
+            TraceDecision("copy: reject backup-raced ctxCurrent=%d",
+                context.IsCurrent() ? 1 : 0);
+            return false;
+        }
+
+        SyntheticCopyGuard syntheticCopyGuard;
+        CGEventRef keyDown = CGEventCreateKeyboardEvent(nullptr, kVK_ANSI_C, true);
+        CGEventRef keyUp = CGEventCreateKeyboardEvent(nullptr, kVK_ANSI_C, false);
+        if (keyDown == nullptr || keyUp == nullptr) {
+            if (keyDown != nullptr) CFRelease(keyDown);
+            if (keyUp != nullptr) CFRelease(keyUp);
+            TraceDecision("copy: reject event-create-failed");
+            return false;
+        }
+        for (CGEventRef event : {keyDown, keyUp}) {
+            CGEventSetFlags(event, kCGEventFlagMaskCommand);
+            CGEventSetIntegerValueField(
+                event,
+                kCGEventSourceUserData,
+                kSyntheticCopyEventMarker);
+        }
+        // Deliver to the frontmost process and through the HID stream. PID
+        // delivery misses Electron renderers; HID alone can be swallowed before
+        // it reaches the focused editor. The in-flight guard above keeps this
+        // process's own tap from cancelling the capture.
+        CGEventPostToPid(application.processIdentifier, keyDown);
+        CGEventPostToPid(application.processIdentifier, keyUp);
+        CGEventPost(kCGHIDEventTap, keyDown);
+        CGEventPost(kCGHIDEventTap, keyUp);
+        CFRelease(keyDown);
+        CFRelease(keyUp);
+        const uint64_t copyWaitStartedAt = MonotonicMilliseconds();
+
+        NSInteger copiedChangeCount = originalChangeCount;
+        while (context.IsCurrent()) {
+            copiedChangeCount = pasteboard.changeCount;
+            if (copiedChangeCount != originalChangeCount) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        }
+        if (copiedChangeCount == originalChangeCount) {
+            copiedChangeCount = pasteboard.changeCount;
+            if (copiedChangeCount == originalChangeCount) {
+                TraceDecision(
+                    "copy: no-change after %llums ctxCurrent=%d",
+                    static_cast<unsigned long long>(MonotonicMilliseconds() - copyWaitStartedAt),
+                    context.IsCurrent() ? 1 : 0);
+                return false;
+            }
+        }
+        TraceDecision(
+            "copy: changed after %llums",
+            static_cast<unsigned long long>(MonotonicMilliseconds() - copyWaitStartedAt));
+
+        const bool copyWasCurrent = pasteboard.changeCount == copiedChangeCount;
+        NSString *copied = copyWasCurrent ? [pasteboard stringForType:NSPasteboardTypeString] : nil;
+        const std::string copiedText = StringFromNSString(copied);
+        const bool copyIsCurrent = copyWasCurrent &&
+            pasteboard.changeCount == copiedChangeCount;
+        const bool sourceChanged = FrontmostApplication().processIdentifier != application.processIdentifier;
+
+        // Restore only while the pasteboard still contains this transaction's
+        // copy. A newer user clipboard write must never be overwritten.
+        if (copyIsCurrent &&
+            !RestoreClipboardBackup(pasteboard, backup, copiedChangeCount)) {
+            TraceDecision("copy: reject restore-failed");
+            return false;
+        }
+        if (!copyIsCurrent || sourceChanged || IsBlank(copiedText) || !context.IsCurrent()) {
+            TraceDecision(
+                "copy: reject post-copy copyIsCurrent=%d sourceChanged=%d blank=%d ctxCurrent=%d",
+                copyIsCurrent ? 1 : 0,
+                sourceChanged ? 1 : 0,
+                IsBlank(copiedText) ? 1 : 0,
+                context.IsCurrent() ? 1 : 0);
+            return false;
+        }
+        NSString *copiedString = NSStringFromString(copiedText);
+        NSString *accessibilityString = NSStringFromString(accessibilityText);
+        const bool copiedExtendsMirror = copiedString != nil && accessibilityString != nil &&
+            copiedString.length > accessibilityString.length;
+        if (hasAccessibilitySelection && copiedText != accessibilityText &&
+            !HasTruncatedAccessibilityMirror(accessibilityText) &&
+            !copiedExtendsMirror) {
+            // Do not replace a valid AX selection with a shorter, unrelated
+            // clipboard value if the host changed its selection concurrently.
+            TraceDecision("copy: reject mirror-mismatch copiedLen=%zu axLen=%zu",
+                copiedText.size(),
+                accessibilityText.size());
+            return false;
+        }
+        TraceDecision("copy: accepted copiedLen=%zu restored=%d",
+            copiedText.size(),
+            copyIsCurrent ? 1 : 0);
+        text = copiedText;
+        return true;
+    }
+}
+
 static bool CaptureSelection(
     const std::string &excludedBundleId,
     Trigger trigger,
@@ -1027,7 +1519,101 @@ static bool CaptureSelection(
         if (compatibilityAttributesJustApplied != 0) {
             enhancedUiCache.MarkApplied(pid, launchToken, compatibilityAttributesJustApplied);
         }
-        return found && context.IsCurrent() && !IsBlank(info.text);
+
+        const bool accessibilityContextCurrent = context.IsCurrent();
+        bool clipboardCaptured = false;
+        // Generic fallback for hosts whose accessibility mirror is truncated or
+        // missing. A real selection must already be visible: either AX returned
+        // a bounded mirror, or the focused element still exposes a non-empty
+        // selected range. Short complete selections never reach this path.
+        const bool hasMarker = TextHasTruncationMarker(info.text);
+        const bool rangeExceedsText =
+            SelectedRangeExceedsText(info.text, info.selectedRangeLength);
+        const bool dragReachesBoundary = info.trigger == Trigger::Drag &&
+            AccessibilityMirrorReachesBoundary(info.text);
+        const bool mirrorNeedsCopy =
+            found && (hasMarker || rangeExceedsText || dragReachesBoundary);
+        // Chromium-family editors publish an empty mirror for long selections:
+        // the hidden textarea behind Monaco keeps no value once the selection
+        // passes the screen-reader paging limit, so AXSelectedText and
+        // AXSelectedTextRange both come back empty. A real drag gesture with
+        // drag distance and duration already validated is itself evidence that
+        // a selection exists, independent of what AX publishes.
+        const bool dragImpliesSelection = !found && accessibilityContextCurrent &&
+            info.trigger == Trigger::Drag &&
+            !FocusedElementIsProtected(application, context);
+        const bool focusedSelectionEvidence = !found && accessibilityContextCurrent &&
+            HasFocusedTextSelection(application, context);
+        const bool missingTextHasSelection =
+            dragImpliesSelection || focusedSelectionEvidence;
+        TraceDecision(
+            "gate trigger=%d found=%d textLen=%zu rangeLen=%ld ctxCurrent=%d "
+            "marker=%d rangeExceeds=%d dragBoundary=%d mirrorNeedsCopy=%d "
+            "dragImplies=%d focusedSelEvidence=%d",
+            static_cast<int>(info.trigger),
+            found ? 1 : 0,
+            info.text.size(),
+            static_cast<long>(info.selectedRangeLength),
+            accessibilityContextCurrent ? 1 : 0,
+            hasMarker ? 1 : 0,
+            rangeExceedsText ? 1 : 0,
+            dragReachesBoundary ? 1 : 0,
+            mirrorNeedsCopy ? 1 : 0,
+            dragImpliesSelection ? 1 : 0,
+            focusedSelectionEvidence ? 1 : 0);
+        if (!IsWeChatSelectionApplication(info.bundleId) &&
+            (mirrorNeedsCopy || missingTextHasSelection)) {
+            const AccessibilityReadContext clipboardContext{
+                captureGeneration,
+                expectedGeneration,
+                MonotonicMilliseconds() + kClipboardCaptureBudgetMs,
+            };
+            std::string copiedText;
+            if (ReadSelectionViaClipboard(
+                    application,
+                    found || missingTextHasSelection,
+                    info.text,
+                    true,
+                    copiedText,
+                    clipboardContext)) {
+                if (!found) {
+                    ClearSelectionGeometry(info);
+                }
+                info.text = std::move(copiedText);
+                info.method = SelectionMethod::Clipboard;
+                found = SelectionCandidateMatchesInput(info);
+                clipboardCaptured = found;
+            }
+        }
+        if (!found && IsWeChatSelectionApplication(info.bundleId)) {
+            const AccessibilityReadContext clipboardContext{
+                captureGeneration,
+                expectedGeneration,
+                MonotonicMilliseconds() + kWeChatClipboardCaptureBudgetMs,
+            };
+            std::string copiedText;
+            if (ReadSelectionViaClipboard(
+                    application,
+                    false,
+                    "",
+                    false,
+                    copiedText,
+                    clipboardContext)) {
+                ClearSelectionGeometry(info);
+                info.text = std::move(copiedText);
+                info.method = SelectionMethod::Clipboard;
+                found = SelectionCandidateMatchesInput(info);
+                clipboardCaptured = found;
+            }
+        }
+        TraceDecision(
+            "result bundle=%s trigger=%d found=%d method=%s textLen=%zu",
+            info.bundleId.c_str(),
+            static_cast<int>(info.trigger),
+            found ? 1 : 0,
+            info.method == SelectionMethod::Clipboard ? "clipboard" : "accessibility",
+            info.text.size());
+        return found && (accessibilityContextCurrent || clipboardCaptured) && !IsBlank(info.text);
     }
 }
 
@@ -1110,7 +1696,7 @@ static std::string SelectionJSON(const SelectionInfo &info) {
         },
         @"direction": SelectionDirection(info),
         @"isFullscreen": @(info.fullscreen),
-        @"method": @"accessibility",
+        @"method": info.method == SelectionMethod::Clipboard ? @"clipboard" : @"accessibility",
         @"trigger": TriggerName(info.trigger),
         @"timestampMs": @(TimestampMilliseconds()),
     };
@@ -1206,7 +1792,9 @@ static uint8_t ClearMatchingTextOnMainThread(
                 static_cast<uint64_t>(kAXMessagingTimeoutSeconds * 1'000.0f),
         };
         std::string current;
-        if (!ReadSelectedText(focused, current, context) || current != expectedText) {
+        CFIndex selectedRangeLength = 0;
+        if (!ReadSelectedText(focused, current, selectedRangeLength, context) ||
+            current != expectedText) {
             CFRelease(focused);
             return 0;
         }
@@ -1376,6 +1964,13 @@ struct TextLensSelectionMonitor {
         void *context) {
         auto *monitor = static_cast<TextLensSelectionMonitor *>(context);
         if (monitor == nullptr || !monitor->running.load(std::memory_order_acquire)) {
+            return event;
+        }
+        const bool syntheticCopy = gSyntheticCopyPosts.load(std::memory_order_acquire) != 0 &&
+            (type == kCGEventKeyDown || type == kCGEventKeyUp || type == kCGEventFlagsChanged);
+        if (syntheticCopy ||
+            CGEventGetIntegerValueField(event, kCGEventSourceUserData) ==
+                kSyntheticCopyEventMarker) {
             return event;
         }
         if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {

@@ -16,7 +16,6 @@ import {
   ChevronDown,
   CircleAlert,
   Copy,
-  LoaderCircle,
   Maximize2,
   Minimize2,
   Pin,
@@ -41,7 +40,6 @@ import {
   type ResultSessionSnapshot,
   type TranslationLanguage
 } from '../../shared'
-import { ActionIcon } from '../components/ActionIcon'
 import { runDetached } from '../lib/asyncEffects'
 import { getErrorMessage } from '../lib/errors'
 import {
@@ -378,6 +376,7 @@ function ResultSessionApp({
   const [translationTarget, setTranslationTarget] = useState<TranslationLanguage | null>(null)
   const [activeModelRoute, setActiveModelRoute] = useState<ModelRoute | null>(null)
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const [modelMenuHighlight, setModelMenuHighlight] = useState<string | null>(null)
   const [routeSwitching, setRouteSwitching] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [commandMessage, setCommandMessage] = useState('')
@@ -560,8 +559,16 @@ function ResultSessionApp({
 
   const chooseModel = useCallback((value: string): void => {
     setModelMenuOpen(false)
+    setModelMenuHighlight(null)
     void switchModel(value)
   }, [switchModel])
+
+  const selectableModelValues = useMemo(
+    () => modelGroups.flatMap((provider) =>
+      provider.keyConfigured ? provider.choices.map((choice) => choice.value) : []
+    ),
+    [modelGroups]
+  )
 
   const copy = useCallback(async (): Promise<void> => {
     const content = getActionEventSnapshot().content
@@ -764,6 +771,7 @@ function ResultSessionApp({
     if (!modelMenuOpen) return
     const close = (restoreFocus: boolean): void => {
       setModelMenuOpen(false)
+      setModelMenuHighlight(null)
       if (restoreFocus) {
         window.requestAnimationFrame(() => modelToggleRef.current?.focus())
       }
@@ -774,10 +782,27 @@ function ResultSessionApp({
       close(false)
     }
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        close(true)
+        return
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return
+      const values = selectableModelValues
+      if (values.length === 0) return
       event.preventDefault()
       event.stopPropagation()
-      close(true)
+      const currentValue = modelMenuHighlight
+        ?? (effectiveModelRoute ? modelRouteValue(effectiveModelRoute) : values[0]!)
+      const currentIndex = Math.max(0, values.indexOf(currentValue))
+      if (event.key === 'Enter') {
+        chooseModel(values[currentIndex] ?? values[0]!)
+        return
+      }
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      const nextIndex = (currentIndex + delta + values.length) % values.length
+      setModelMenuHighlight(values[nextIndex] ?? values[0]!)
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     window.addEventListener('keydown', onKeyDown, true)
@@ -785,7 +810,7 @@ function ResultSessionApp({
       document.removeEventListener('pointerdown', onPointerDown, true)
       window.removeEventListener('keydown', onKeyDown, true)
     }
-  }, [modelMenuOpen])
+  }, [chooseModel, effectiveModelRoute, modelMenuHighlight, modelMenuOpen, selectableModelValues])
 
   useEffect(() => {
     if (modelMenuOpen && modelSwitchDisabled) setModelMenuOpen(false)
@@ -987,9 +1012,6 @@ function ResultSessionApp({
       ))}
       <header className="result-header" onPointerDown={startWindowDrag}>
         <div className="result-heading">
-          <span className="result-heading__icon">
-            <ActionIcon name={action?.icon ?? 'sparkles'} size={16} />
-          </span>
           <div className="result-heading__line">
             <h1>{action?.name ?? 'AI 结果'}</h1>
             {translationRoute ? (
@@ -1083,10 +1105,13 @@ function ResultSessionApp({
                         <div className="result-model-menu__options">
                           {provider.choices.map((choice) => {
                             const selected = choice.value === modelRouteValue(effectiveModelRoute)
+                            const highlighted = choice.value === (
+                              modelMenuHighlight ?? modelRouteValue(effectiveModelRoute)
+                            )
                             return (
                               <button
                                 key={choice.value}
-                                className={`result-model-menu__option ${selected ? 'is-selected' : ''}`}
+                                className={`result-model-menu__option ${selected ? 'is-selected' : ''} ${highlighted ? 'is-highlighted' : ''}`}
                                 type="button"
                                 role="option"
                                 aria-selected={selected}
@@ -1094,7 +1119,7 @@ function ResultSessionApp({
                                 onClick={() => chooseModel(choice.value)}
                               >
                                 <span>{choice.modelName}</span>
-                                {selected && <Check size={13} aria-hidden="true" />}
+                                {selected ? <Check size={13} aria-hidden="true" /> : highlighted ? <kbd>↵</kbd> : null}
                               </button>
                             )
                           })}
@@ -1191,8 +1216,11 @@ function ResultSessionApp({
                             />
                           </article>
                         ) : !hasThinking ? (
-                          <div className="result-turn__waiting">
-                            <LoaderCircle className="result-spin" size={16} />
+                          <div className="result-turn__waiting" aria-busy="true">
+                            <span className="skeleton-stack" aria-hidden="true">
+                              <span className="skeleton skeleton--line" />
+                              <span className="skeleton skeleton--line skeleton--line-short" />
+                            </span>
                             <span>正在等待模型响应…</span>
                           </div>
                         ) : null}
@@ -1215,19 +1243,16 @@ function ResultSessionApp({
                   className={`result-placeholder ${
                     status === 'streaming' ? 'result-placeholder--waiting' : ''
                   }`}
+                  aria-busy="true"
                 >
-                  {status === 'streaming' ? (
-                    <>
-                      <span className="result-waiting-dots" aria-hidden="true">
-                        <span />
-                        <span />
-                        <span />
-                      </span>
-                      <span className="result-placeholder__label">正在等待模型响应…</span>
-                    </>
-                  ) : (
-                    <span className="result-placeholder__label">正在准备结果…</span>
-                  )}
+                  <span className="skeleton-stack" aria-hidden="true">
+                    <span className="skeleton skeleton--line" />
+                    <span className="skeleton skeleton--line" />
+                    <span className="skeleton skeleton--line skeleton--line-short" />
+                  </span>
+                  <span className="result-placeholder__label">
+                    {status === 'streaming' ? '正在等待模型响应…' : '正在准备结果…'}
+                  </span>
                 </div>
               )}
             </>
@@ -1257,7 +1282,7 @@ function ResultSessionApp({
           <textarea
             aria-label="继续提问"
             placeholder={isAsk ? '输入问题，基于选中文本提问' : '输入继续提问'}
-            title="Enter 发送，Shift+Enter 换行"
+            title="Enter 发送，Shift+Enter 换行，Esc 关闭"
             rows={followUpExpanded ? 4 : 1}
             maxLength={20_000}
             value={followUpQuestion}
@@ -1287,6 +1312,10 @@ function ResultSessionApp({
           >
             {followUpExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           </button>
+          <span className="result-followup__hint">
+            <kbd>↵</kbd>
+            <span>发送</span>
+          </span>
         </div>}
         <div className="result-actions">
           {!windowsRenderer && settings?.result.dismissMode === 'manual' && (
@@ -1307,6 +1336,7 @@ function ResultSessionApp({
             >
               <Square size={13} fill="currentColor" />
               停止
+              <kbd>Esc</kbd>
             </button>
           ) : (
             <button
@@ -1314,10 +1344,11 @@ function ResultSessionApp({
               type="button"
               disabled={retrying || !requestId || (status === 'error' && !retryable)}
               onClick={() => void retry()}
-              title="使用相同选区重新生成"
+              title="使用相同选区重新生成（R）"
             >
               <RefreshCw size={14} />
               重试
+              <kbd>R</kbd>
             </button>
           )}
           <button
@@ -1325,10 +1356,11 @@ function ResultSessionApp({
             type="button"
             disabled={!hasContent}
             onClick={() => void copy()}
-            title={hasContent ? '复制结果到剪贴板' : '生成完成后可复制'}
+            title={hasContent ? '复制结果到剪贴板（C）' : '生成完成后可复制'}
           >
             {copyComplete ? <Check size={14} /> : <Copy size={14} />}
             {copyComplete ? '已复制' : '复制'}
+            {!copyComplete && <kbd>C</kbd>}
           </button>
         </div>
       </footer>

@@ -399,7 +399,7 @@ export function CustomActionDialog({
                     ))}
                   </select>
                   <span className="field__hint">
-                    已根据模型 ID 自动识别思考能力；关闭思考可缩短首字延迟。
+                    只显示该模型已配置的思考档位；关闭思考可缩短首字延迟。
                   </span>
                 </label>
               )}
