@@ -5,6 +5,9 @@ import {
   AI_TEXT_LIMIT,
   BUILTIN_SEARCH_ENGINE_IDS,
   DEFAULT_RESULT_FONT_SIZE,
+  DEFAULT_SCREENSHOT_SHORTCUT,
+  DEFAULT_SCREENSHOT_TOOLBAR_ITEMS,
+  SCREENSHOT_TOOLBAR_ITEM_IDS,
   MAX_ACTIONS,
   MAX_ENABLED_ACTIONS,
   MAX_PROVIDERS,
@@ -96,7 +99,8 @@ export const aiActionKindSchema = z.enum([
   'explain',
   'refine',
   'custom',
-  'ask'
+  'ask',
+  'extract'
 ])
 export const actionKindSchema = z.enum([
   'copy',
@@ -106,7 +110,8 @@ export const actionKindSchema = z.enum([
   'explain',
   'refine',
   'custom',
-  'ask'
+  'ask',
+  'extract'
 ])
 /** @deprecated Prefer ActionKind. */
 export const actionTypeSchema = actionKindSchema
@@ -298,41 +303,56 @@ const aiActionBaseShape = {
   ...actionBaseShape,
   providerId: z.string().trim().max(64),
   modelId: z.string().trim().max(256),
-  prompt: z
-    .string()
-    .trim()
-    .min(1)
-    .max(10_000)
-    .refine((prompt) => prompt.includes(TEXT_PLACEHOLDER), {
-      message: `AI 提示词必须包含 ${TEXT_PLACEHOLDER}`
-    }),
+  prompt: z.string().trim().min(1).max(10_000),
   thinkingMode: thinkingModeSchema.default('off')
 } as const
 
-export const aiActionSchema = z
-  .object({
-    ...aiActionBaseShape,
-    kind: aiActionKindSchema
+/** Image-input actions carry the payload as a multimodal part, so they have
+ * no text placeholder to substitute. */
+const requireTextPlaceholder = <T extends z.ZodType<{ kind: string; prompt: string }>>(
+  schema: T
+) =>
+  schema.superRefine((value, ctx) => {
+    if (value.kind === 'extract') return
+    if (!value.prompt.includes(TEXT_PLACEHOLDER)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `AI 提示词必须包含 ${TEXT_PLACEHOLDER}`,
+        path: ['prompt']
+      })
+    }
   })
-  .strict()
 
-export const customActionSchema = z
-  .object({
-    ...aiActionBaseShape,
-    kind: z.literal('custom')
-  })
-  .strict()
+export const aiActionSchema = requireTextPlaceholder(
+  z
+    .object({
+      ...aiActionBaseShape,
+      kind: aiActionKindSchema
+    })
+    .strict()
+)
+
+export const customActionSchema = requireTextPlaceholder(
+  z
+    .object({
+      ...aiActionBaseShape,
+      kind: z.literal('custom')
+    })
+    .strict()
+)
 
 /** Actions shipped by default are editable and use the same runtime shape as user actions. */
 export const builtInActionSchema = z.discriminatedUnion('kind', [
   copyActionSchema,
   searchActionSchema,
-  z
-    .object({
-      ...aiActionBaseShape,
-      kind: z.enum(['translate', 'summary', 'explain', 'refine', 'ask'])
-    })
-    .strict()
+  requireTextPlaceholder(
+    z
+      .object({
+        ...aiActionBaseShape,
+        kind: z.enum(['translate', 'summary', 'explain', 'refine', 'ask', 'extract'])
+      })
+      .strict()
+  )
 ])
 
 export const actionDefinitionSchema = z.discriminatedUnion('kind', [
@@ -468,9 +488,51 @@ function providersArraySchema<T extends z.ZodTypeAny>(provider: T) {
 }
 
 export const toolbarDisplayModeSchema = z.enum(['icon-label', 'icon-only'])
-export const toolbarSettingsSchema = z
-  .object({ displayMode: toolbarDisplayModeSchema })
+export const screenshotToolbarItemIdSchema = z.enum(SCREENSHOT_TOOLBAR_ITEM_IDS)
+const screenshotToolbarItemInputSchema = z
+  .object({
+    id: z.enum([...SCREENSHOT_TOOLBAR_ITEM_IDS, 'copy', 'extract']),
+    enabled: z.boolean(),
+    order: z.number().int().nonnegative()
+  })
   .strict()
+export const screenshotToolbarItemSchema = screenshotToolbarItemInputSchema.extend({
+  id: screenshotToolbarItemIdSchema
+})
+export const screenshotToolbarItemsSchema = z
+  .array(screenshotToolbarItemInputSchema)
+  .max(SCREENSHOT_TOOLBAR_ITEM_IDS.length + 2)
+  .superRefine((items, context) => {
+    const seen = new Set<string>()
+    for (const item of items) {
+      if (item.id === 'copy' || item.id === 'extract') continue
+      if (seen.has(item.id)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: `截图工具栏项重复：${item.id}` })
+      }
+      seen.add(item.id)
+    }
+  })
+  .transform((items) => {
+    const known = items
+      .filter((item) => item.id !== 'copy' && item.id !== 'extract')
+      .sort((left, right) => left.order - right.order)
+    const seen = new Set(known.map((item) => item.id))
+    const missing = SCREENSHOT_TOOLBAR_ITEM_IDS.filter((id) => !seen.has(id)).map((id) => ({
+      id,
+      enabled: true,
+      order: known.length
+    }))
+    return [...known, ...missing].map((item, order) => ({ ...item, order }))
+  })
+export const toolbarSettingsSchema = z
+  .object({
+    displayMode: toolbarDisplayModeSchema,
+    screenshotItems: screenshotToolbarItemsSchema.default(DEFAULT_SCREENSHOT_TOOLBAR_ITEMS),
+    screenshotOrder: z.array(actionIdSchema).max(MAX_ACTIONS + SCREENSHOT_TOOLBAR_ITEM_IDS.length).default([])
+  })
+  .strict()
+export type ScreenshotToolbarItemId = z.infer<typeof screenshotToolbarItemIdSchema>
+export type ScreenshotToolbarItem = z.infer<typeof screenshotToolbarItemSchema>
 export type ToolbarSettings = z.infer<typeof toolbarSettingsSchema>
 
 export const resultDismissModeSchema = z.enum(['manual', 'blur', 'pointer-leave'])
@@ -558,6 +620,7 @@ const commonSettingsShape = {
   version: z.literal(SETTINGS_VERSION),
   enabled: z.boolean(),
   captureShortcut: captureShortcutSchema,
+  screenshotShortcut: captureShortcutSchema.default(DEFAULT_SCREENSHOT_SHORTCUT),
   locale: supportedLocaleSchema,
   translate: translationSettingsSchema,
   toolbar: toolbarSettingsSchema,
@@ -621,6 +684,7 @@ export const settingsUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
     captureShortcut: captureShortcutSchema.optional(),
+    screenshotShortcut: captureShortcutSchema.optional(),
     locale: supportedLocaleSchema.optional(),
     translate: translationSettingsSchema.optional(),
     toolbar: toolbarSettingsSchema.optional(),

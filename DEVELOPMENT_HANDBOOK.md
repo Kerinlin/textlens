@@ -1,6 +1,6 @@
-# TextLens 开发手册
+# Flick 开发手册
 
-本手册面向继续开发 TextLens 的贡献者与迁移工作区，涵盖本地开发环境、可迁移源码导出，以及版本演进记录。产品简介、功能说明与安装步骤见 [README.md](./README.md)。
+本手册面向继续开发 Flick 的贡献者与迁移工作区，涵盖本地开发环境、可迁移源码导出，以及版本演进记录。产品简介、功能说明与安装步骤见 [README.md](./README.md)。
 
 ## 本地开发
 
@@ -21,7 +21,7 @@
     rustup target add x86_64-pc-windows-msvc
     pnpm dev:windows
 
-`pnpm dev:windows` 会像正式应用一样隐藏启动设置窗口并显示短暂提示。通过通知区打开设置页；测试完整退出时，使用通知区菜单，或将设置窗口关闭行为改为“退出 TextLens”。
+`pnpm dev:windows` 会像正式应用一样隐藏启动设置窗口并显示短暂提示。通过通知区打开设置页；测试完整退出时，使用通知区菜单，或将设置窗口关闭行为改为“退出 Flick”。
 
 常用命令：
 
@@ -54,13 +54,13 @@
     pnpm test             # 运行 renderer/shared 单元测试
     pnpm check:rust       # 检查 arm64 Rust 后端
     pnpm verify           # 类型、测试、网页构建和 Rust 检查
-    pnpm package:app      # 只构建 arm64 TextLens.app
-    pnpm package:dmg      # 构建并核验 arm64 TextLens.app 和 DMG
+    pnpm package:app      # 只构建 arm64 Flick.app
+    pnpm package:dmg      # 构建并核验 arm64 Flick.app 和 DMG
 
 构建产物：
 
-    src-tauri/target/aarch64-apple-darwin/release/bundle/macos/TextLens.app
-    src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/TextLens_<version>_aarch64.dmg
+    src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Flick.app
+    src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Flick_<version>_aarch64.dmg
 
 ## 导出可迁移开发源码
 
@@ -70,13 +70,13 @@
 
 该命令会生成一个新的干净目录：
 
-    portable-dev-sources/TextLens-<version>-dev-source
+    portable-dev-sources/flick-<version>-dev-source
 
 例如版本 0.3.56 会导出为：
 
-    portable-dev-sources/TextLens-0.3.56-dev-source
+    portable-dev-sources/flick-0.3.56-dev-source
 
-也可将上述目录复制到仓库外，作为独立的 `TextLens-<version>-dev-source` 文件夹或压缩包分发；包内只含源码与文档，便于整夹拷贝到其他机器继续开发。
+也可将上述目录复制到仓库外，作为独立的 `flick-<version>-dev-source` 文件夹或压缩包分发；包内只含源码与文档，便于整夹拷贝到其他机器继续开发。
 
 ### 导出内容
 
@@ -97,7 +97,7 @@
 
 ### 迁移到其他电脑后
 
-1. 把整个 `TextLens-<version>-dev-source` 文件夹（或已重命名的 `TextLens` 工作区）复制到目标机器。
+1. 把整个 `flick-<version>-dev-source` 文件夹（或已重命名的 `flick` 工作区）复制到目标机器。
 2. 安装 Node.js 22+、pnpm 11+，以及对应平台的 Rust / 平台工具链。
 3. 在源码根目录执行：
 
@@ -129,7 +129,7 @@
 
 以下记录根据本项目连续开发需求与当前实现整理。部分小版本是内部迭代，重点记录功能变化，不等同于正式公开发行说明。
 
-TextLens 以 macOS 0.3.16 为功能基线，逐步完成 Windows 10/11 x64 版本并继续迭代。内容覆盖界面变化、设置调整、功能对齐、跨应用选区兼容、窗口生命周期、性能与稳定性修复，以及桌面端构建发布链。
+Flick 以 macOS 0.3.16 为功能基线，逐步完成 Windows 10/11 x64 版本并继续迭代。内容覆盖界面变化、设置调整、功能对齐、跨应用选区兼容、窗口生命周期、性能与稳定性修复，以及桌面端构建发布链。历史版本记录保留当时的产品名。
 
 这段开发并不是一次简单的平台移植。macOS 版本依赖 Accessibility API、Event Tap、Core Graphics 和 AppKit；Windows 需要重新处理 UI Automation、Win32 输入 Hook、OLE 剪贴板、WebView2、混合 DPI、窗口激活规则和通知区域生命周期。项目始终保留同一套 React renderer、设置结构、动作服务、模型请求和流式输出，仅在必须依赖操作系统的部分使用平台实现。
 

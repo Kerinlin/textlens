@@ -1,10 +1,10 @@
-# TextLens
+# Flick
 
 [English](./README.en.md) | **中文**
 
-TextLens 是一个轻量的桌面划词助手，面向 **macOS 12+ Apple Silicon（M 系列芯片）**和 **Windows 10/11 x64**，使用 Tauri 2、Rust、React 和 TypeScript 构建。
+Flick 是一个轻量的桌面划词助手，面向 **macOS 12+ Apple Silicon（M 系列芯片）**和 **Windows 10/11 x64**，使用 Tauri 2、Rust、React 和 TypeScript 构建。
 
-用户在其他应用中选中文字后，可以直接执行复制、搜索、翻译、总结、解释、润色、问AI 及自定义 AI 动作。macOS 版本常驻菜单栏，默认不在 Dock 显示；Windows 版本普通启动后在通知区域和后台运行，仅显示短暂的“TextLens 已启动”提示，设置窗口由用户从通知区域打开。TextLens 不保存划词历史，只有用户主动点击 AI 动作后才会把选中文字发送给所配置的模型服务。
+用户在其他应用中选中文字后，可以直接执行复制、搜索、翻译、总结、解释、润色、问AI 及自定义 AI 动作。macOS 版本常驻菜单栏，默认不在 Dock 显示；Windows 版本普通启动后在通知区域和后台运行，仅显示短暂的“Flick 已启动”提示，设置窗口由用户从通知区域打开。Flick 不保存划词历史，只有用户主动点击 AI 动作后才会把选中文字发送给所配置的模型服务。
 
 两个平台共用 renderer、设置、动作、模型请求、流式输出和数据契约，仅选区捕获、剪贴板、窗口原生属性和系统集成使用平台实现。本地开发、可迁移源码导出与版本演进记录见 [DEVELOPMENT_HANDBOOK.md](./DEVELOPMENT_HANDBOOK.md)。
 
@@ -24,11 +24,11 @@ TextLens 是一个轻量的桌面划词助手，面向 **macOS 12+ Apple Silicon
 
 ## 设计灵感与第三方来源
 
-- TextLens 的产品方向和部分交互习惯参考了 [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) 的“划词助手”，包括划词工具栏、结果窗、置顶、失焦关闭、再次划词和模型切换等使用逻辑。
-- Cherry Studio 主体使用 Electron；TextLens 主要使用更轻量的 Tauri 框架，把其中启发性的“划词助手”工作流重构为独立桌面工具，并保留自己的窗口管理、设置存储、模型请求与界面实现。
+- Flick 的产品方向和部分交互习惯参考了 [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) 的“划词助手”，包括划词工具栏、结果窗、置顶、失焦关闭、再次划词和模型切换等使用逻辑。
+- Cherry Studio 主体使用 Electron；Flick 主要使用更轻量的 Tauri 框架，把其中启发性的“划词助手”工作流重构为独立桌面工具，并保留自己的窗口管理、设置存储、模型请求与界面实现。
 - macOS 选区捕获桥接层基于 MIT 许可的 [selection-hook 2.0.2](https://github.com/0xfullex/selection-hook/tree/v2.0.2) 改造，完整 MIT 许可保存在 [LICENSE.selection-hook](./LICENSE.selection-hook)。
 
-TextLens 当前没有声明独立的开源许可证。Cherry Studio 改编材料仍受其上游 AGPL-3.0 条款约束，selection-hook 改编部分仍受 MIT 许可证约束。公开分发或二次开发前，请先阅读第三方许可文件。
+Flick 当前没有声明独立的开源许可证。Cherry Studio 改编材料仍受其上游 AGPL-3.0 条款约束，selection-hook 改编部分仍受 MIT 许可证约束。公开分发或二次开发前，请先阅读第三方许可文件。
 
 ## 主要功能
 
@@ -39,7 +39,7 @@ TextLens 当前没有声明独立的开源许可证。Cherry Studio 改编材料
 - 多服务商、多模型（OpenAI-compatible）；服务商可启停；动作可单独绑定模型与提示词；支持获取模型后多选合并与排序。
 - 结果窗流式输出，支持 Markdown / 表格 / 公式；可拖动、缩放、置顶与多种关闭方式；正文可再次划词。
 
-在 Cherry Studio「划词助手」启发之上，TextLens 侧重的增强：
+在 Cherry Studio「划词助手」启发之上，Flick 侧重的增强：
 
 - **结果内继续提问：** 翻译 / 解释 / 总结 / 润色等结果框底部均可继续输入，在当前结果上多轮追问（不只「问AI」）。
 - **标题栏换模重生：** 按服务商分组切换模型，并在同一结果框内重新生成；翻译可切换 CN/EN/JA/KO/RU/DE/FR 目标语言。
@@ -72,7 +72,7 @@ macOS 使用系统自带的 WKWebView；Windows 使用 Microsoft Edge WebView2 R
 
 ## 主要开源项目与用途
 
-以下列表记录直接影响 TextLens 主要功能的上游项目。精确版本以 [pnpm-lock.yaml](./pnpm-lock.yaml) 和 [src-tauri/Cargo.lock](./src-tauri/Cargo.lock) 为准，详细归属说明见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+以下列表记录直接影响 Flick 主要功能的上游项目。精确版本以 [pnpm-lock.yaml](./pnpm-lock.yaml) 和 [src-tauri/Cargo.lock](./src-tauri/Cargo.lock) 为准，详细归属说明见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
 | 项目 | 用途 | 许可证 |
 | --- | --- | --- |
@@ -143,8 +143,8 @@ macOS 使用系统自带的 WKWebView；Windows 使用 Microsoft Edge WebView2 R
 1. 运行生成的 NSIS 安装包；如果系统没有 WebView2 Runtime，安装程序会自动拉起 bootstrapper。
 2. 未签名测试包可能触发 Microsoft Defender SmartScreen，可在确认 SHA-256 后选择“更多信息 → 仍要运行”。
 3. 首次启动后应用会常驻通知区域，不会自动打开设置页；设置窗口由通知区域菜单打开。
-4. 点击设置窗口 X 默认隐藏到通知区域；可在设置中改为直接退出。完整退出可使用通知区域菜单的“退出 TextLens”。
-5. TextLens 不提权，因此无法读取“以管理员身份运行”的高权限应用选区；普通权限应用不受此限制。
+4. 点击设置窗口 X 默认隐藏到通知区域；可在设置中改为直接退出。完整退出可使用通知区域菜单的“退出 Flick”。
+5. Flick 不提权，因此无法读取“以管理员身份运行”的高权限应用选区；普通权限应用不受此限制。
 
 当前 Windows 安装包仍是未签名测试版，可能触发 Microsoft Defender SmartScreen；自动化验证不能替代不同应用、权限和 DPI 环境下的实机验收，不适合在完成代码签名和完整兼容性验收前公开分发。
 
@@ -152,10 +152,10 @@ macOS 使用系统自带的 WKWebView；Windows 使用 Microsoft Edge WebView2 R
 
 当前只发布 Apple Silicon 版本，不能在 Intel Mac 上运行。
 
-1. 打开生成的 DMG，将 TextLens 拖到“应用程序”。
-2. 安装新版本前，先从菜单栏彻底退出正在运行的旧版 TextLens；新版本默认作为菜单栏工具运行，不在 Dock 显示。
-3. 首次启动若被 Gatekeeper 拦截，在 Finder 中右键 TextLens 并选择“打开”；也可以到“系统设置 → 隐私与安全性”确认打开。
-4. 按提示到“系统设置 → 隐私与安全性 → 辅助功能”启用 TextLens，然后重新启动应用。
+1. 打开生成的 DMG，将 Flick 拖到“应用程序”。
+2. 安装新版本前，先从菜单栏彻底退出正在运行的旧版 Flick；新版本默认作为菜单栏工具运行，不在 Dock 显示。
+3. 首次启动若被 Gatekeeper 拦截，在 Finder 中右键 Flick 并选择“打开”；也可以到“系统设置 → 隐私与安全性”确认打开。
+4. 按提示到“系统设置 → 隐私与安全性 → 辅助功能”启用 Flick，然后重新启动应用。
 
 当前 macOS DMG 仍是未签名、未公证的测试产物，不适合直接公开分发。正式发布前仍需 Apple Developer ID 签名和公证。
 
@@ -167,7 +167,7 @@ macOS 使用系统自带的 WKWebView；Windows 使用 Microsoft Edge WebView2 R
 - [LICENSE.selection-hook](./LICENSE.selection-hook)
 - 上游项目许可证要求的版权和许可文本
 
-TextLens 当前未声明开源许可证，也没有完成 Apple Developer ID、Windows Authenticode 签名、公证或自动更新。正式公开发布之前，还应完成完整的依赖许可证清单、安全复核、签名、公证和安装验收。
+Flick 当前未声明开源许可证，也没有完成 Apple Developer ID、Windows Authenticode 签名、公证或自动更新。正式公开发布之前，还应完成完整的依赖许可证清单、安全复核、签名、公证和安装验收。
 
 ## 友链
 

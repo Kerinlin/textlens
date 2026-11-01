@@ -7366,7 +7366,7 @@ fn selection_trace_enabled() -> bool {
 
 fn selection_trace_directory() -> Option<std::path::PathBuf> {
     std::env::var_os("LOCALAPPDATA")
-        .map(|directory| std::path::PathBuf::from(directory).join("TextLens"))
+        .map(|directory| std::path::PathBuf::from(directory).join("Flick"))
 }
 
 fn trace_selection_line(line: String) {

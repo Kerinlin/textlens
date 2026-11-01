@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TextLens",
+  "productName": "Flick",
   "version": "0.4.0",
-  "identifier": "com.local.textlens",
+  "identifier": "com.local.flick",
   "app": {
     "windows": [
       {
         "label": "settings",
-        "title": "TextLens 设置",
+        "title": "Flick 设置",
         "url": "settings/index.html",
         "width": 760,
         "height": 780,
@@ -38,7 +38,7 @@
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false,
         "compression": "lzma",
-        "startMenuFolder": "TextLens"
+        "startMenuFolder": "Flick"
       }
     }
   }

@@ -7,15 +7,15 @@ use std::{
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::Emitter;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 #[cfg(not(target_os = "windows"))]
 use tauri::{LogicalPosition, LogicalSize};
-#[cfg(target_os = "windows")]
-use tauri::{PhysicalPosition, PhysicalSize};
 
 const TOOLBAR_LABEL: &str = "selection-toolbar";
+pub const SCREENSHOT_LABEL: &str = "screenshot-overlay";
+pub const SCREENSHOT_RESET_EVENT: &str = "textlens:screenshot-reset";
+pub const SHOT_PIN_PREFIX: &str = "shot-pin-";
 pub const TOOLBAR_POINTER_EVENT: &str = "textlens:toolbar-pointer";
 #[cfg(target_os = "windows")]
 const STARTUP_NOTICE_LABEL_PREFIX: &str = "startup-notice-";
@@ -123,7 +123,7 @@ pub fn show_startup_notice(app: &AppHandle, kind: StartupNoticeKind) -> tauri::R
         label,
         WebviewUrl::App(format!("startup/index.html?kind={}", kind.query_value()).into()),
     )
-    .title("TextLens")
+    .title("Flick")
     .inner_size(logical_size.width, logical_size.height)
     .decorations(false)
     .transparent(true)
@@ -172,6 +172,114 @@ pub fn show_startup_notice(app: &AppHandle, kind: StartupNoticeKind) -> tauri::R
         let _ = window.close();
     });
     Ok(())
+}
+
+pub fn open_screenshot_overlay(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(SCREENSHOT_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        // A reused overlay keeps its previous renderer state (last shot,
+        // selection and annotations), so a fresh session must start clean.
+        window.emit(SCREENSHOT_RESET_EVENT, ())?;
+        return Ok(());
+    }
+    let monitors = app.available_monitors().unwrap_or_default();
+    let (x, y, width, height) = monitors.iter().fold(
+        (0.0_f64, 0.0_f64, 800.0_f64, 600.0_f64),
+        |acc, monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            let left = acc.0.min(position.x as f64);
+            let top = acc.1.min(position.y as f64);
+            let right = (acc.0 + acc.2).max(position.x as f64 + size.width as f64);
+            let bottom = (acc.1 + acc.3).max(position.y as f64 + size.height as f64);
+            (left, top, right - left, bottom - top)
+        },
+    );
+    let window = WebviewWindowBuilder::new(
+        app,
+        SCREENSHOT_LABEL,
+        WebviewUrl::App("screenshot/index.html".into()),
+    )
+    .title("Flick 截图")
+    .inner_size(width, height)
+    .position(x, y)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .resizable(false)
+    .minimizable(false)
+    .maximizable(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .focused(true)
+    .visible(true)
+    .build()?;
+    // The builder API only accepts logical units, but the virtual-desktop
+    // union above is physical. Re-assert the exact physical geometry so the
+    // overlay covers every monitor without logical/physical drift on HiDPI.
+    let _ = window.set_position(tauri::Position::Physical(PhysicalPosition::new(
+        x.round() as i32,
+        y.round() as i32,
+    )));
+    let _ = window.set_size(tauri::Size::Physical(PhysicalSize::new(
+        width.round() as u32,
+        height.round() as u32,
+    )));
+    configure_toolbar_native(&window)?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+pub fn hide_screenshot_overlay(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(SCREENSHOT_LABEL) {
+        let _ = window.hide();
+    }
+}
+
+pub fn open_shot_pin(app: &AppHandle, width: u32, height: u32) -> tauri::Result<String> {
+    let id = uuid_lite();
+    let label = format!("{SHOT_PIN_PREFIX}{id}");
+    // Size the pin to the captured region at 1:1 logical scale. Keep the
+    // aspect ratio exact: only clamp oversized shots down and lift tiny ones
+    // to a still-grabbable width, scaling the other edge along.
+    let half_width = f64::from(width) / 2.0;
+    let half_height = f64::from(height) / 2.0;
+    let mut scale = (720.0 / half_width).min(540.0 / half_height).min(1.0);
+    if half_width * scale < 48.0 {
+        scale = 48.0 / half_width;
+    }
+    let logical_width = (half_width * scale).round().max(1.0);
+    let logical_height = (half_height * scale).round().max(1.0);
+    let window = WebviewWindowBuilder::new(
+        app,
+        &label,
+        WebviewUrl::App("shot-pin/index.html".into()),
+    )
+    .title("Flick 贴图")
+    .inner_size(logical_width, logical_height)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .resizable(true)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .visible(true)
+    .build()?;
+    configure_toolbar_native(&window)?;
+    Ok(label)
+}
+
+fn uuid_lite() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}")
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -520,7 +628,7 @@ impl WindowCoordinator {
             TOOLBAR_LABEL,
             WebviewUrl::App("toolbar/index.html".into()),
         )
-        .title("TextLens")
+        .title("Flick")
         .inner_size(size.width, size.height)
         .decorations(false)
         .transparent(true)
@@ -1089,7 +1197,7 @@ impl WindowCoordinator {
             &label,
             WebviewUrl::App(format!("result/index.html?sessionId={session_id}").into()),
         )
-        .title(format!("{title} - TextLens"))
+        .title(format!("{title} - Flick"))
         .inner_size(size.width, size.height)
         .min_inner_size(360.0, 260.0)
         .decorations(false)

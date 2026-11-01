@@ -34,7 +34,9 @@ export default defineConfig({
         toolbar: fromRoot('src/renderer/toolbar/index.html'),
         result: fromRoot('src/renderer/result/index.html'),
         settings: fromRoot('src/renderer/settings/index.html'),
-        startup: fromRoot('src/renderer/startup/index.html')
+        startup: fromRoot('src/renderer/startup/index.html'),
+        screenshot: fromRoot('src/renderer/screenshot/index.html'),
+        shotPin: fromRoot('src/renderer/shot-pin/index.html')
       }
     }
   }

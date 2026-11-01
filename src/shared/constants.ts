@@ -1,7 +1,7 @@
-export const APP_NAME = 'TextLens'
-export const APP_ID = 'com.local.textlens'
+export const APP_NAME = 'Flick'
+export const APP_ID = 'com.local.flick'
 
-export const SETTINGS_VERSION = 12 as const
+export const SETTINGS_VERSION = 13 as const
 export const AI_TEXT_LIMIT = 20_000
 export const AI_PROMPT_LIMIT = 50_000
 export const AI_OUTPUT_LIMIT = 1_000_000
@@ -50,6 +50,7 @@ export const DEFAULT_PROVIDER_NAME = 'OpenAI Compatible'
 /** @deprecated Models now live under providers. */
 export const DEFAULT_MODEL = ''
 export const DEFAULT_CAPTURE_SHORTCUT = ''
+export const DEFAULT_SCREENSHOT_SHORTCUT = 'CommandOrControl+Shift+A'
 
 export const DEFAULT_LOCALE = 'zh-CN' as const
 export const DEFAULT_TRANSLATION_PAIR = {
@@ -57,8 +58,46 @@ export const DEFAULT_TRANSLATION_PAIR = {
   alternateLanguage: 'en-US'
 } as const
 
+export const SCREENSHOT_TOOLBAR_ITEM_IDS = [
+  'pen',
+  'rect',
+  'arrow',
+  'mosaic',
+  'text',
+  'pin',
+  'done'
+] as const
+
+export const SCREENSHOT_TOOLBAR_ITEM_NAMES: Readonly<Record<(typeof SCREENSHOT_TOOLBAR_ITEM_IDS)[number], string>> = {
+  pen: '画笔',
+  rect: '矩形',
+  arrow: '箭头',
+  mosaic: '马赛克',
+  text: '文字',
+  pin: '贴图',
+  done: '完成'
+}
+
+export const SCREENSHOT_TOOLBAR_ITEM_ICONS: Readonly<Record<(typeof SCREENSHOT_TOOLBAR_ITEM_IDS)[number], string>> = {
+  pen: 'pen-line',
+  rect: 'square',
+  arrow: 'arrow-up-right',
+  mosaic: 'grid-3x3',
+  text: 'type',
+  pin: 'pin',
+  done: 'check'
+}
+
+export const DEFAULT_SCREENSHOT_TOOLBAR_ITEMS = SCREENSHOT_TOOLBAR_ITEM_IDS.map((id, order) => ({
+  id,
+  enabled: true,
+  order
+}))
+
 export const DEFAULT_TOOLBAR_SETTINGS = {
-  displayMode: 'icon-label'
+  displayMode: 'icon-label',
+  screenshotItems: DEFAULT_SCREENSHOT_TOOLBAR_ITEMS,
+  screenshotOrder: []
 } as const
 
 export const DEFAULT_RESULT_SETTINGS = {

@@ -1,6 +1,7 @@
 import {
   BUILTIN_SEARCH_ENGINE_IDS,
   DEFAULT_CAPTURE_SHORTCUT,
+  DEFAULT_SCREENSHOT_SHORTCUT,
   DEFAULT_APPLICATION_SETTINGS,
   DEFAULT_FILTER_SETTINGS,
   DEFAULT_SELECTION_CAPTURE_SETTINGS,
@@ -57,9 +58,10 @@ ${TEXT_PLACEHOLDER}
 
 <selection>
 ${TEXT_PLACEHOLDER}
-</selection>`
+</selection>`,
+  extract: '提取这张图片中所有可见文字。只返回识别出的文字，保持阅读顺序和换行。不要翻译、解释或补充图片里没有的内容。如果没有可识别文字，只返回空字符串。'
 } satisfies Readonly<
-  Record<'translate' | 'summary' | 'explain' | 'refine' | 'custom' | 'ask', string>
+  Record<'translate' | 'summary' | 'explain' | 'refine' | 'custom' | 'ask' | 'extract', string>
 >)
 
 // The built-in explain prompt shipped before the Cherry-compatible default.
@@ -208,6 +210,18 @@ export const DEFAULT_ACTIONS: readonly ActionDefinition[] = Object.freeze([
     providerId: DEFAULT_PROVIDER_ID,
     modelId: DEFAULT_MODEL_ID,
     thinkingMode: 'off'
+  },
+  {
+    id: 'extract',
+    name: '提取文字',
+    icon: 'scan-text',
+    kind: 'extract',
+    enabled: true,
+    order: 7,
+    prompt: DEFAULT_ACTION_PROMPTS.extract,
+    providerId: DEFAULT_PROVIDER_ID,
+    modelId: DEFAULT_MODEL_ID,
+    thinkingMode: 'off'
   }
 ])
 
@@ -216,6 +230,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze(
     version: SETTINGS_VERSION,
     enabled: true,
     captureShortcut: DEFAULT_CAPTURE_SHORTCUT,
+    screenshotShortcut: DEFAULT_SCREENSHOT_SHORTCUT,
     locale: DEFAULT_LOCALE,
     translate: DEFAULT_TRANSLATION_PAIR,
     toolbar: DEFAULT_TOOLBAR_SETTINGS,
@@ -243,6 +258,7 @@ export function toPublicSettings(settings: AppSettings): PublicSettings {
     version: settings.version,
     enabled: settings.enabled,
     captureShortcut: settings.captureShortcut,
+    screenshotShortcut: settings.screenshotShortcut,
     locale: settings.locale,
     translate: settings.translate,
     toolbar: settings.toolbar,
@@ -596,9 +612,16 @@ function migrateLegacyCommon(input: UnknownRecord) {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : defaults.enabled,
     captureShortcut:
       typeof input.captureShortcut === 'string' ? input.captureShortcut : defaults.captureShortcut,
+    screenshotShortcut:
+      typeof input.screenshotShortcut === 'string'
+        ? input.screenshotShortcut
+        : defaults.screenshotShortcut,
     locale: input.locale ?? defaults.locale,
     translate: input.translate ?? defaults.translate,
-    toolbar: input.toolbar ?? defaults.toolbar,
+    toolbar: {
+      ...defaults.toolbar,
+      ...asRecord(input.toolbar)
+    },
     result: input.result ?? defaults.result,
     trigger: input.trigger ?? defaults.trigger,
     application: input.application ?? defaults.application,
@@ -614,6 +637,7 @@ export function migrateAppSettings(input: unknown): AppSettings {
   const candidate = asRecord(input)
   if (
     candidate.version === SETTINGS_VERSION ||
+    candidate.version === 12 ||
     candidate.version === 11 ||
     candidate.version === 10 ||
     candidate.version === 9 ||
@@ -653,6 +677,7 @@ export function migratePublicSettings(input: unknown): PublicSettings {
   const candidate = asRecord(input)
   if (
     candidate.version === SETTINGS_VERSION ||
+    candidate.version === 12 ||
     candidate.version === 11 ||
     candidate.version === 10 ||
     candidate.version === 9 ||

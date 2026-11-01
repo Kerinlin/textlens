@@ -51,8 +51,12 @@ import {
   RESULT_FONT_SIZE_MIN,
   TRANSLATION_LANGUAGES,
   TRANSLATION_LANGUAGE_NAMES,
+  SCREENSHOT_TOOLBAR_ITEM_ICONS,
+  SCREENSHOT_TOOLBAR_ITEM_NAMES,
   actionDefinitionSchema,
   isAiActionDefinition,
+  orderedScreenshotToolbarIds,
+  reorderScreenshotToolbarOrder,
   searchEngineDisplayName,
   type AccessibilityStatus,
   type ActionDefinition,
@@ -123,7 +127,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{
   {
     id: 'actions',
     label: '动作',
-    blurb: '决定工具栏显示哪些功能，可拖拽排序；启用的会出现在划词工具栏。'
+    blurb: '决定划词和截图工具栏显示哪些功能，可拖拽排序、开关隐藏。'
   },
   {
     id: 'language',
@@ -168,6 +172,7 @@ const ACTION_KIND_NAMES: Readonly<Record<ActionDefinition['kind'], string>> = {
   explain: '解释',
   refine: '润色',
   ask: '问AI',
+  extract: '图片处理',
   custom: '自定义 AI'
 }
 
@@ -541,9 +546,25 @@ export function SettingsApp(): JSX.Element {
     () => sortAndNumberActions(draft?.actions ?? []),
     [draft?.actions]
   )
-  const enabledActions = useMemo(
-    () => orderedActions.filter((action) => action.enabled),
+  const selectionActions = useMemo(
+    () => orderedActions.filter((action) => action.kind !== 'extract'),
     [orderedActions]
+  )
+  const imageActions = useMemo(
+    () => orderedActions.filter((action) => action.kind === 'extract'),
+    [orderedActions]
+  )
+  const enabledActions = useMemo(
+    () => selectionActions.filter((action) => action.enabled),
+    [selectionActions]
+  )
+  const screenshotEntryIds = useMemo(
+    () => orderedScreenshotToolbarIds(
+      draft?.toolbar.screenshotItems ?? [],
+      imageActions,
+      draft?.toolbar.screenshotOrder ?? []
+    ),
+    [draft?.toolbar.screenshotItems, draft?.toolbar.screenshotOrder, imageActions]
   )
   const persist = async (): Promise<PublicSettings | null> => {
     if (!draft) return null
@@ -631,7 +652,7 @@ export function SettingsApp(): JSX.Element {
       }
       await window.textLens.quitApp()
     } catch (error) {
-      setBanner({ kind: 'error', text: getErrorMessage(error, '无法退出 TextLens') })
+      setBanner({ kind: 'error', text: getErrorMessage(error, `无法退出 ${APP_NAME}`) })
     } finally {
       quittingRef.current = false
       setOperation(null)
@@ -935,48 +956,76 @@ export function SettingsApp(): JSX.Element {
     setNewModelInputs((current) => ({ ...current, [provider.id]: '' }))
   }
 
-  const saveAction = (value: ActionEditorValue): void => {
-    changeDraft((current) => {
-      const existing = editor !== 'new' && editor ? editor : null
-      const base = {
-        id: existing?.id ?? createId(value.kind),
-        name: value.name,
-        icon: value.icon,
-        kind: value.kind,
-        enabled: existing?.enabled ?? false,
-        order: existing?.order ?? current.actions.length
+  // Action-list operations (edit, toggle, delete, reorder) take effect
+  // immediately: a toggled action must vanish from the screenshot toolbar
+  // without a separate full-page save.
+  const persistDraft = (next: PublicSettings, successText?: string): void => {
+    void (async () => {
+      const validation = buildSettingsUpdate(next)
+      if (!validation.valid) {
+        setBanner({ kind: 'error', text: validation.message })
+        return
       }
-      let candidate: ActionDefinition
-      if (isAiActionDefinition({
+      try {
+        const saved = await window.textLens.updateSettings(validation.value)
+        await refreshRuntimeStatus().catch(() => undefined)
+        setDraft(normalizePublicSettings(saved))
+        setDirty(false)
+        dirtyRef.current = false
+        if (successText) setBanner({ kind: 'success', text: successText })
+      } catch (error) {
+        await refreshRuntimeStatus().catch(() => undefined)
+        setBanner({ kind: 'error', text: getErrorMessage(error, '保存设置失败') })
+      }
+    })()
+  }
+
+  const saveAction = (value: ActionEditorValue): void => {
+    if (!draft) return
+    const existing = editor !== 'new' && editor ? editor : null
+    const base = {
+      id: existing?.id ?? createId(value.kind),
+      name: value.name,
+      icon: value.icon,
+      kind: value.kind,
+      // Image-input actions skip the selection-toolbar slot budget, so a
+      // freshly created one can be enabled right away; other kinds stay
+      // disabled until the user makes room.
+      enabled: existing?.enabled ?? value.kind === 'extract',
+      order: existing?.order ?? draft.actions.length
+    }
+    let candidate: ActionDefinition
+    if (isAiActionDefinition({
+      ...base,
+      providerId: value.providerId ?? '',
+      modelId: value.modelId ?? '',
+      prompt: value.prompt ?? '',
+      thinkingMode: value.thinkingMode ?? 'off'
+    } as ActionDefinition)) {
+      candidate = {
         ...base,
         providerId: value.providerId ?? '',
         modelId: value.modelId ?? '',
         prompt: value.prompt ?? '',
         thinkingMode: value.thinkingMode ?? 'off'
-      } as ActionDefinition)) {
-        candidate = {
-          ...base,
-          providerId: value.providerId ?? '',
-          modelId: value.modelId ?? '',
-          prompt: value.prompt ?? '',
-          thinkingMode: value.thinkingMode ?? 'off'
-        } as ActionDefinition
-      } else if (value.kind === 'search') {
-        candidate = {
-          ...base,
-          kind: 'search',
-          searchEngineId: value.searchEngineId ?? DEFAULT_SEARCH_ENGINE_ID
-        } as ActionDefinition
-      } else {
-        candidate = base as ActionDefinition
-      }
-      const action = actionDefinitionSchema.parse(candidate)
-      const actions = existing
-        ? current.actions.map((item) => (item.id === existing.id ? action : item))
-        : [...current.actions, action]
-      return { ...current, actions: sortAndNumberActions(actions) }
-    })
+      } as ActionDefinition
+    } else if (value.kind === 'search') {
+      candidate = {
+        ...base,
+        kind: 'search',
+        searchEngineId: value.searchEngineId ?? DEFAULT_SEARCH_ENGINE_ID
+      } as ActionDefinition
+    } else {
+      candidate = base as ActionDefinition
+    }
+    const action = actionDefinitionSchema.parse(candidate)
+    const actions = existing
+      ? draft.actions.map((item) => (item.id === existing.id ? action : item))
+      : [...draft.actions, action]
+    const next = { ...draft, actions: sortAndNumberActions(actions) }
+    changeDraft(() => next)
     setEditor(null)
+    persistDraft(next, `“${action.name}”已保存`)
   }
 
   const removeAction = (action: ActionDefinition): void => {
@@ -988,32 +1037,81 @@ export function SettingsApp(): JSX.Element {
   }
 
   const deleteAction = (action: ActionDefinition): void => {
-    changeDraft((current) => ({
-      ...current,
-      actions: sortAndNumberActions(current.actions.filter((item) => item.id !== action.id))
-    }))
+    if (!draft) return
+    const next = {
+      ...draft,
+      actions: sortAndNumberActions(draft.actions.filter((item) => item.id !== action.id))
+    }
+    changeDraft(() => next)
     setActionPendingDelete(null)
-    setBanner({ kind: 'success', text: `已移除动作“${action.name}”；保存设置后生效` })
+    persistDraft(next, `已移除“${action.name}”`)
+  }
+
+  const toggleScreenshotItem = (itemId: string, enabled: boolean): void => {
+    if (!draft) return
+    const item = draft.toolbar.screenshotItems.find((candidate) => candidate.id === itemId)
+    if (!item) return
+    const visible = draft.toolbar.screenshotItems.filter((candidate) => candidate.enabled)
+    if (!enabled && item.enabled && visible.length <= 1) {
+      setBanner({ kind: 'error', text: '截图工具栏至少保留一项' })
+      return
+    }
+    const next = {
+      ...draft,
+      toolbar: {
+        ...draft.toolbar,
+        screenshotItems: draft.toolbar.screenshotItems.map((candidate) =>
+          candidate.id === itemId ? { ...candidate, enabled } : candidate
+        )
+      }
+    }
+    changeDraft(() => next)
+    const name = SCREENSHOT_TOOLBAR_ITEM_NAMES[item.id]
+    persistDraft(next, enabled ? `截图工具栏已显示“${name}”` : `截图工具栏已隐藏“${name}”`)
+  }
+
+  const handleScreenshotDragEnd = (event: DragEndEvent): void => {
+    setDraggingId(null)
+    if (!draft || !event.over) return
+    const itemId = String(event.active.id)
+    const overId = String(event.over.id)
+    if (itemId === overId) return
+    const orderedIds = orderedScreenshotToolbarIds(
+      draft.toolbar.screenshotItems,
+      draft.actions,
+      draft.toolbar.screenshotOrder
+    )
+    const next = {
+      ...draft,
+      toolbar: {
+        ...draft.toolbar,
+        screenshotOrder: reorderScreenshotToolbarOrder(orderedIds, itemId, overId)
+      }
+    }
+    changeDraft(() => next)
+    persistDraft(next)
   }
 
   const toggleAction = (actionId: string, enabled: boolean): void => {
     if (!draft) return
     const action = draft.actions.find((candidate) => candidate.id === actionId)
     if (!action) return
-    if (enabled && !action.enabled && enabledActions.length >= MAX_ENABLED_ACTIONS) {
+    if (action.kind !== 'extract' && enabled && !action.enabled && enabledActions.length >= MAX_ENABLED_ACTIONS) {
       setBanner({ kind: 'error', text: `工具栏最多显示 ${MAX_ENABLED_ACTIONS} 个动作` })
       return
     }
-    if (!enabled && action.enabled && enabledActions.length <= 1) {
+    if (action.kind !== 'extract' && !enabled && action.enabled && enabledActions.length <= 1) {
       setBanner({ kind: 'error', text: '至少需要启用一个工具栏动作' })
       return
     }
-    changeDraft((current) => ({
-      ...current,
-      actions: sortAndNumberActions(current.actions.map((item) =>
+    const next = {
+      ...draft,
+      actions: sortAndNumberActions(draft.actions.map((item) =>
         item.id === actionId ? { ...item, enabled } : item
       ))
-    }))
+    }
+    changeDraft(() => next)
+    persistDraft(next, enabled ? `已启用“${action.name}”` : `已停用“${action.name}”`)
   }
 
   const handleDragStart = (event: DragStartEvent): void => {
@@ -1027,10 +1125,9 @@ export function SettingsApp(): JSX.Element {
     const actionId = String(event.active.id)
     const overId = String(event.over.id)
     if (actionId === overId) return
-    changeDraft((current) => ({
-      ...current,
-      actions: reorderActions(current.actions, actionId, overId)
-    }))
+    const next = { ...draft, actions: reorderActions(draft.actions, actionId, overId) }
+    changeDraft(() => next)
+    persistDraft(next)
   }
 
   if (!draft) {
@@ -1123,6 +1220,39 @@ export function SettingsApp(): JSX.Element {
                       ))}
                     </div>
                   </div>
+                  <div className="setting-row setting-row--stackable">
+                    <div>
+                      <strong>截图快捷键</strong>
+                      <p>按下后框选屏幕，可标注、复制、贴在屏幕上，或用已配置的视觉模型提取文字。</p>
+                    </div>
+                    <div className="shortcut-capture">
+                      <input
+                        className="control shortcut-control"
+                        value={draft.screenshotShortcut}
+                        maxLength={128}
+                        spellCheck={false}
+                        readOnly
+                        aria-label="截图快捷键"
+                        placeholder="点击后按下组合键"
+                        onKeyDown={(event) => {
+                          if (event.key === 'Tab') return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          if (event.key === 'Backspace' || event.key === 'Delete') {
+                            changeDraft((current) => ({ ...current, screenshotShortcut: '' }))
+                            return
+                          }
+                          if (event.key === 'Escape') {
+                            event.currentTarget.blur()
+                            return
+                          }
+                          const shortcut = formatKeyboardEventToTauriShortcut(event)
+                          if (!shortcut) return
+                          changeDraft((current) => ({ ...current, screenshotShortcut: shortcut }))
+                        }}
+                      />
+                    </div>
+                  </div>
                   {draft.trigger.mode === 'shortcut' && (
                     <div className="setting-row setting-row--stackable">
                       <div>
@@ -1172,7 +1302,10 @@ export function SettingsApp(): JSX.Element {
                     <select className="control compact-control" value={draft.toolbar.displayMode}
                       onChange={(event) => changeDraft((current) => ({
                         ...current,
-                        toolbar: { displayMode: event.target.value as PublicSettings['toolbar']['displayMode'] }
+                        toolbar: {
+                          ...current.toolbar,
+                          displayMode: event.target.value as PublicSettings['toolbar']['displayMode']
+                        }
                       }))}>
                       <option value="icon-label">图标和文字</option><option value="icon-only">仅图标</option>
                     </select>
@@ -1181,7 +1314,7 @@ export function SettingsApp(): JSX.Element {
                     <div className="setting-row">
                       <div>
                         <strong>关闭主窗口时</strong>
-                        <p>隐藏后划词功能继续运行，也可选择直接退出 TextLens。</p>
+                        <p>隐藏后划词功能继续运行，也可选择直接退出 {APP_NAME}。</p>
                       </div>
                       <select
                         className="control compact-control"
@@ -1195,7 +1328,7 @@ export function SettingsApp(): JSX.Element {
                         }))}
                       >
                         <option value="hide-to-tray">隐藏到通知区域（默认）</option>
-                        <option value="quit">退出 TextLens</option>
+                        <option value="quit">退出 {APP_NAME}</option>
                       </select>
                     </div>
                   )}
@@ -1412,39 +1545,88 @@ export function SettingsApp(): JSX.Element {
             <Plus size={15} />添加动作
           </button>
         </div>
-        <div className="settings-card toolbar-preview-card">
-          <div className="toolbar-preview__heading">
-            <span className="toolbar-preview-label">工具栏预览</span>
-            <span>{enabledActions.length} / {MAX_ENABLED_ACTIONS} 个动作已显示</span>
-          </div>
-          <div className={`toolbar-preview ${draft.toolbar.displayMode === 'icon-only' ? 'toolbar-preview--icons' : ''}`}>
-            <span className="toolbar-preview__logo" aria-hidden="true" />
-            {enabledActions.map((action) => <span className="toolbar-preview__action" key={action.id} title={action.name}>
-              <ActionIcon name={action.icon} size={14} />{draft.toolbar.displayMode !== 'icon-only' && <span>{action.name}</span>}</span>)}
-          </div>
-          <p className="search-behavior-note">搜索动作：选中 HTTP(S) URL、域名或 IP 时直接打开；其他文字使用该动作所选的搜索引擎。</p>
-        </div>
-        <DndContext
-          sensors={dragSensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragCancel={() => setDraggingId(null)}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext items={orderedActions.map((action) => action.id)} strategy={verticalListSortingStrategy}>
-            <div className="action-list action-list--sortable" role="list" aria-label="工具栏动作列表">
-              {orderedActions.map((action) => <SortableActionRow
-                key={action.id}
-                action={action}
-                enabled={action.enabled}
-                dragging={draggingId === action.id}
-                onEdit={setEditor}
-                onDelete={removeAction}
-                onToggle={(item) => toggleAction(item.id, !item.enabled)}
-              />)}
+        <div className="settings-card action-settings-card">
+          <div className="action-settings-card__intro">
+            <div className="toolbar-preview__heading">
+              <span className="toolbar-preview-label">划词工具栏</span>
+              <span>{enabledActions.length} / {MAX_ENABLED_ACTIONS} 个动作已显示</span>
             </div>
-          </SortableContext>
-        </DndContext>
+            <div className={`toolbar-preview ${draft.toolbar.displayMode === 'icon-only' ? 'toolbar-preview--icons' : ''}`}>
+              <span className="toolbar-preview__logo" aria-hidden="true" />
+              {enabledActions.map((action) => <span className="toolbar-preview__action" key={action.id} title={action.name}>
+                <ActionIcon name={action.icon} size={14} />{draft.toolbar.displayMode !== 'icon-only' && <span>{action.name}</span>}</span>)}
+            </div>
+            <p className="search-behavior-note">搜索动作：选中 HTTP(S) URL、域名或 IP 时直接打开；其他文字使用该动作所选的搜索引擎。</p>
+          </div>
+          <DndContext
+            sensors={dragSensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragCancel={() => setDraggingId(null)}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={selectionActions.map((action) => action.id)} strategy={verticalListSortingStrategy}>
+              <div className="action-list action-list--sortable" role="list" aria-label="划词工具栏动作列表">
+                {selectionActions.map((action) => <SortableActionRow
+                  key={action.id}
+                  action={action}
+                  enabled={action.enabled}
+                  dragging={draggingId === action.id}
+                  onEdit={setEditor}
+                  onDelete={removeAction}
+                  onToggle={(item) => toggleAction(item.id, !item.enabled)}
+                />)}
+              </div>
+            </SortableContext>
+          </DndContext>
+        </div>
+        <div className="settings-card action-settings-card">
+          <div className="action-settings-card__intro">
+            <div className="toolbar-preview__heading">
+              <span className="toolbar-preview-label">截图工具栏</span>
+              <span>
+                {imageActions.filter((action) => action.enabled).length + draft.toolbar.screenshotItems.filter((item) => item.enabled).length}
+                {' / '}
+                {imageActions.length + draft.toolbar.screenshotItems.length} 项显示
+              </span>
+            </div>
+            <p className="search-behavior-note">默认截图工具与图片处理可混合拖拽排序；按钮外观跟随「工具条显示」，完成会复制截图并关闭。</p>
+          </div>
+          <div className="action-list action-list--sortable" role="list" aria-label="截图工具栏列表">
+            <DndContext
+              sensors={dragSensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragCancel={() => setDraggingId(null)}
+              onDragEnd={handleScreenshotDragEnd}
+            >
+              <SortableContext items={screenshotEntryIds} strategy={verticalListSortingStrategy}>
+                {screenshotEntryIds.map((id) => {
+                  const item = draft.toolbar.screenshotItems.find((candidate) => candidate.id === id)
+                  if (item) {
+                    return <SortableScreenshotItem
+                      key={item.id}
+                      item={item}
+                      dragging={draggingId === item.id}
+                      onToggle={toggleScreenshotItem}
+                    />
+                  }
+                  const action = imageActions.find((candidate) => candidate.id === id)
+                  if (!action) return null
+                  return <SortableActionRow
+                    key={action.id}
+                    action={action}
+                    enabled={action.enabled}
+                    dragging={draggingId === action.id}
+                    onEdit={setEditor}
+                    onDelete={removeAction}
+                    onToggle={(entry) => toggleAction(entry.id, !entry.enabled)}
+                  />
+                })}
+              </SortableContext>
+            </DndContext>
+          </div>
+        </div>
       </section>
           )}
 
@@ -2115,6 +2297,57 @@ function ModelPickerDialog({
           </button>
         </footer>
       </section>
+    </div>
+  )
+}
+
+function SortableScreenshotItem({ item, dragging, onToggle }: {
+  item: PublicSettings['toolbar']['screenshotItems'][number]
+  dragging: boolean
+  onToggle: (itemId: string, enabled: boolean) => void
+}): JSX.Element {
+  const {
+    attributes,
+    listeners,
+    isDragging,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition
+  } = useSortable({ id: item.id })
+  const name = SCREENSHOT_TOOLBAR_ITEM_NAMES[item.id]
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`action-dnd-row ${dragging || isDragging ? 'is-dragging' : ''}`}
+      role="listitem"
+    >
+      <button
+        ref={setActivatorNodeRef}
+        className="action-dnd-handle"
+        type="button"
+        title={`拖动“${name}”调整顺序`}
+        aria-label={`拖动${name}`}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={16} aria-hidden="true" />
+      </button>
+      <span className="action-row__icon">
+        <ActionIcon name={SCREENSHOT_TOOLBAR_ITEM_ICONS[item.id]} size={17} />
+      </span>
+      <div className="action-row__copy">
+        <strong>{name}</strong>
+        <span>{item.id === 'done' ? '复制截图并关闭' : '截图工具栏'}</span>
+      </div>
+      <div className="action-row__controls">
+        <label className="switch switch--small">
+          <input type="checkbox" checked={item.enabled} onChange={() => onToggle(item.id, !item.enabled)} />
+          <span aria-hidden="true" />
+          <span className="sr-only">{item.enabled ? '隐藏' : '显示'}{name}</span>
+        </label>
+      </div>
     </div>
   )
 }

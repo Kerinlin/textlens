@@ -1,6 +1,6 @@
 # Third-party notices
 
-TextLens independently implements its application and native selection-capture code. It does not copy Cherry Studio branding, icons, CSS, or other visual assets. The limited Cherry Studio-derived prompt material is identified below.
+Flick independently implements its application and native selection-capture code. It does not copy Cherry Studio branding, icons, CSS, or other visual assets. The limited Cherry Studio-derived prompt material is identified below.
 
 ## Cherry Studio default AI action prompts
 
@@ -10,7 +10,7 @@ TextLens independently implements its application and native selection-capture c
 - Usage: the default translation prompt, the Simplified Chinese selection-summary, explanation, and refinement prompts, and their placeholder-expansion behavior were adapted from Cherry Studio.
 - Source files: [`src/shared/ai/prompts.ts`](https://github.com/CherryHQ/cherry-studio/blob/900e928543892c2ad050fdd9da45e43f4c429519/src/shared/ai/prompts.ts#L52-L53), [`src/renderer/i18n/locales/zh-cn.json`](https://github.com/CherryHQ/cherry-studio/blob/900e928543892c2ad050fdd9da45e43f4c429519/src/renderer/i18n/locales/zh-cn.json#L5201-L5204), and [`ActionGeneral.tsx`](https://github.com/CherryHQ/cherry-studio/blob/900e928543892c2ad050fdd9da45e43f4c429519/src/renderer/windows/selection/action/components/ActionGeneral.tsx#L53-L79).
 
-TextLens fixes one duplicated punctuation mark in the refinement prompt and expresses Cherry Studio's summary/explanation text concatenation as an explicit `{{text}}` placeholder. TextLens's custom-action default prompt remains independently authored. This notice does not alter or replace the upstream AGPL-3.0 terms applicable to the adapted material.
+Flick fixes one duplicated punctuation mark in the refinement prompt and expresses Cherry Studio's summary/explanation text concatenation as an explicit `{{text}}` placeholder. Flick's custom-action default prompt remains independently authored. This notice does not alter or replace the upstream AGPL-3.0 terms applicable to the adapted material.
 
 ## selection-hook 2.0.2
 
@@ -22,7 +22,7 @@ The full upstream copyright and MIT license notice is reproduced verbatim in `LI
 
 ## Direct application dependencies
 
-TextLens also uses independently developed software, including:
+Flick also uses independently developed software, including:
 
 - Tauri 2 — Apache-2.0 OR MIT — <https://github.com/tauri-apps/tauri>
 - React and React DOM — MIT — <https://github.com/facebook/react>

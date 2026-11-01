@@ -65,7 +65,7 @@ function logToolbarDiagnostic(
   attempt: number,
   error?: unknown
 ): void {
-  console.warn('[TextLens][toolbar]', {
+  console.warn('[Flick][toolbar]', {
     stage: `${stage}:${attempt}`,
     ...(selectionId ? { selectionId } : {}),
     ...(arguments.length >= 4 ? { errorClass: rendererErrorClass(error) } : {})
@@ -79,7 +79,7 @@ function traceToolbarTiming(stage: string, startedAt: number | null): void {
   } catch {
     return
   }
-  console.debug('[TextLens][selection-timing]', {
+  console.debug('[Flick][selection-timing]', {
     stage,
     durationMs: Math.max(0, performance.now() - startedAt)
   })
@@ -274,7 +274,9 @@ export function ToolbarApp(): JSX.Element {
   const visibleActions = useMemo(
     () =>
       [...(settings?.actions ?? [])]
-        .filter((action) => action.enabled)
+        // Image-input actions only make sense on a screenshot capture; the
+        // selection toolbar never carries one.
+        .filter((action) => action.enabled && action.kind !== 'extract')
         .sort((left, right) => left.order - right.order)
         .slice(0, MAX_ENABLED_ACTIONS),
     [settings]

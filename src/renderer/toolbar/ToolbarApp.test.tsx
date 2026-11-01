@@ -371,7 +371,7 @@ describe('ToolbarApp', () => {
 
     await waitFor(() => expect(hideToolbar).toHaveBeenCalledTimes(2))
     await act(async () => Promise.resolve())
-    expect(warn).toHaveBeenCalledWith('[TextLens][renderer]', {
+    expect(warn).toHaveBeenCalledWith('[Flick][renderer]', {
       scope: 'toolbar',
       operation: 'hide-escape',
       errorClass: 'Error'

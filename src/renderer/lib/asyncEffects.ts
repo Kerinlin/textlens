@@ -34,7 +34,7 @@ export function runDetached(
       options.onError(error)
       return
     }
-    console.warn('[TextLens][renderer]', {
+    console.warn('[Flick][renderer]', {
       scope: options.scope,
       operation: options.operation,
       errorClass: errorClass(error)

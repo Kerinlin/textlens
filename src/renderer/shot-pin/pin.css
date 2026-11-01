@@ -1,0 +1,30 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+#root img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: transparent;
+  user-select: none;
+}
+
+.pin-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 12px;
+  background: var(--surface-solid);
+  border-radius: var(--radius-md);
+}

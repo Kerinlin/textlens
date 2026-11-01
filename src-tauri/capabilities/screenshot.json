@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot",
+  "description": "Window lifecycle permissions for the screenshot overlay and pinned shots",
+  "windows": ["screenshot-overlay", "shot-pin-*"],
+  "permissions": [
+    "core:window:allow-hide",
+    "core:window:allow-close"
+  ]
+}

@@ -1,6 +1,6 @@
-# TextLens Platform Apps
+# Flick Platform Apps
 
-TextLens keeps one shared Tauri, Rust, and React codebase. The `apps` directory only owns platform-specific code, assets, and release checks.
+Flick keeps one shared Tauri, Rust, and React codebase. The `apps` directory only owns platform-specific code, assets, and release checks.
 
 Current layout:
 

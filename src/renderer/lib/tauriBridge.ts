@@ -82,7 +82,7 @@ class EventHub<T> {
       try {
         value = parse(event.payload)
       } catch {
-        console.error(`[TextLens] ignored invalid ${eventName} event payload`)
+        console.error(`[Flick] ignored invalid ${eventName} event payload`)
         return
       }
       for (const listener of this.listeners) {
@@ -91,7 +91,7 @@ class EventHub<T> {
         } catch {
           // One renderer subscriber must not prevent other windows/components
           // from receiving the same validated native event.
-          console.error(`[TextLens] ${eventName} event listener failed`)
+          console.error(`[Flick] ${eventName} event listener failed`)
         }
       }
     }
@@ -111,7 +111,7 @@ class EventHub<T> {
         await listen(eventName, forward)
         return
       } catch (error: unknown) {
-        console.warn('[TextLens][renderer]', {
+        console.warn('[Flick][renderer]', {
           stage: `event-listen:${index + 1}`,
           eventId: eventName,
           errorClass: rendererErrorClass(error)

@@ -99,31 +99,95 @@ enum ChatRole {
     Assistant,
 }
 
+/// OpenAI multimodal content: either plain text or text + image parts.
+/// Image-input actions (screenshot extraction) send the capture alongside
+/// the editable prompt as a `image_url` data-URL part.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum ChatContent {
+    Text(String),
+    Parts(Vec<ChatPart>),
+}
+
+impl ChatContent {
+    /// True when a turn carries nothing a model can act on. An image part
+    /// alone is a valid turn for image-input actions.
+    fn is_effectively_empty(&self) -> bool {
+        match self {
+            Self::Text(text) => text.trim().is_empty(),
+            Self::Parts(parts) => parts.iter().all(|part| match part {
+                ChatPart::Text { text } => text.trim().is_empty(),
+                ChatPart::ImageUrl { .. } => false,
+            }),
+        }
+    }
+
+    /// Character volume of the textual portions only; image payloads are not
+    /// counted against conversation limits.
+    fn text_char_count(&self) -> usize {
+        match self {
+            Self::Text(text) => text.chars().count(),
+            Self::Parts(parts) => parts
+                .iter()
+                .fold(0usize, |total, part| match part {
+                    ChatPart::Text { text } => total.saturating_add(text.chars().count()),
+                    ChatPart::ImageUrl { .. } => total,
+                }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ChatPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrlContent },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ImageUrlContent {
+    url: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct ChatMessage {
     role: ChatRole,
-    content: String,
+    content: ChatContent,
 }
 
 impl ChatMessage {
     fn system(content: String) -> Self {
         Self {
             role: ChatRole::System,
-            content,
+            content: ChatContent::Text(content),
         }
     }
 
     fn user(content: String) -> Self {
         Self {
             role: ChatRole::User,
-            content,
+            content: ChatContent::Text(content),
+        }
+    }
+
+    fn user_with_image(content: String, image_base64: &str) -> Self {
+        Self {
+            role: ChatRole::User,
+            content: ChatContent::Parts(vec![
+                ChatPart::Text { text: content },
+                ChatPart::ImageUrl {
+                    image_url: ImageUrlContent {
+                        url: format!("data:image/png;base64,{image_base64}"),
+                    },
+                },
+            ]),
         }
     }
 
     fn assistant(content: String) -> Self {
         Self {
             role: ChatRole::Assistant,
-            content,
+            content: ChatContent::Text(content),
         }
     }
 }
@@ -135,6 +199,7 @@ struct FrozenActionRequest {
     source_text: String,
     cursor: Option<Point>,
     target_language: Option<TranslationLanguage>,
+    image_base64: Option<String>,
 }
 
 impl From<&ExecuteActionRequest> for FrozenActionRequest {
@@ -145,6 +210,7 @@ impl From<&ExecuteActionRequest> for FrozenActionRequest {
             source_text: request.text.clone(),
             cursor: request.cursor.clone(),
             target_language: request.target_language,
+            image_base64: request.image_base64.clone(),
         }
     }
 }
@@ -652,7 +718,7 @@ impl ActionService {
             .pool_idle_timeout(Duration::from_secs(300))
             .pool_max_idle_per_host(8)
             .tcp_nodelay(true)
-            .user_agent(format!("TextLens/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("Flick/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| ActionServiceError::Client)?;
         Ok(Self {
@@ -1731,7 +1797,14 @@ fn validate_request_shape(request: &ExecuteActionRequest) -> Result<(), ActionSe
             "动作会话参数无效".to_owned(),
         ));
     }
-    if request.text.trim().is_empty() {
+    if let Some(image) = request.image_base64.as_deref() {
+        if image.len() > crate::screenshot::MAX_SCREENSHOT_PNG_BYTES.saturating_mul(2) {
+            return Err(ActionServiceError::Validation(
+                "截图数据过大，无法执行动作".to_owned(),
+            ));
+        }
+    }
+    if request.text.trim().is_empty() && request.image_base64.is_none() {
         return Err(ActionServiceError::Validation("选中文本为空".to_owned()));
     }
     if request.text.chars().count() > AI_TEXT_LIMIT {
@@ -1839,20 +1912,23 @@ fn resolve_request_config(
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| ActionServiceError::Validation("请先为动作选择模型".to_owned()))?;
             let route = resolve_route(settings, action, provider_id, model_id)?;
+            let image_input = request.image_base64.is_some();
             let prompt = build_prompt(
                 action,
                 &request.source_text,
                 settings,
                 request.target_language,
                 &ticket.request_id,
+                image_input,
             )?;
+            let user_message = match &request.image_base64 {
+                Some(image) => ChatMessage::user_with_image(prompt.user, image),
+                None => ChatMessage::user(prompt.user),
+            };
             PreparedSessionData {
                 frozen_request: request.clone(),
                 route,
-                last_messages: vec![
-                    ChatMessage::system(prompt.system),
-                    ChatMessage::user(prompt.user),
-                ],
+                last_messages: vec![ChatMessage::system(prompt.system), user_message],
                 committed_messages: Vec::new(),
             }
         }
@@ -1875,20 +1951,23 @@ fn resolve_request_config(
                 .unwrap_or(route.provider.id.as_str());
             let model_id = options.model_id.as_deref().unwrap_or(route.model.as_str());
             let route = resolve_route(settings, action, provider_id, model_id)?;
+            let image_input = request.image_base64.is_some();
             let prompt = build_prompt(
                 action,
                 &request.source_text,
                 settings,
                 request.target_language,
                 &ticket.request_id,
+                image_input,
             )?;
+            let user_message = match &request.image_base64 {
+                Some(image) => ChatMessage::user_with_image(prompt.user, image),
+                None => ChatMessage::user(prompt.user),
+            };
             PreparedSessionData {
                 frozen_request: request,
                 route,
-                last_messages: vec![
-                    ChatMessage::system(prompt.system),
-                    ChatMessage::user(prompt.user),
-                ],
+                last_messages: vec![ChatMessage::system(prompt.system), user_message],
                 committed_messages: Vec::new(),
             }
         }
@@ -1948,6 +2027,7 @@ fn build_prompt(
     settings: &AppSettings,
     target_language: Option<TranslationLanguage>,
     boundary_seed: &str,
+    image_input: bool,
 ) -> Result<BuiltPrompt, ActionServiceError> {
     if text.chars().count() > AI_TEXT_LIMIT {
         return Err(ActionServiceError::Validation(format!(
@@ -1957,7 +2037,7 @@ fn build_prompt(
     let prompt = action
         .prompt()
         .ok_or_else(|| ActionServiceError::Validation("AI 动作缺少提示词".to_owned()))?;
-    if !prompt.contains(TEXT_PLACEHOLDER) {
+    if !prompt.contains(TEXT_PLACEHOLDER) && !image_input {
         return Err(ActionServiceError::Validation(format!(
             "AI 动作提示词必须包含 {TEXT_PLACEHOLDER}"
         )));
@@ -1983,7 +2063,11 @@ fn build_prompt(
     } else {
         (text.to_owned(), None)
     };
-    let user = template.replace(TEXT_PLACEHOLDER, &source_slot);
+    let user = if prompt.contains(TEXT_PLACEHOLDER) {
+        template.replace(TEXT_PLACEHOLDER, &source_slot)
+    } else {
+        template
+    };
     if user.chars().count() > AI_PROMPT_LIMIT {
         return Err(ActionServiceError::Validation(format!(
             "展开后的提示词超过 {AI_PROMPT_LIMIT} 个字符的上限"
@@ -2088,14 +2172,14 @@ fn validate_conversation_messages(messages: &[ChatMessage]) -> Result<(), Action
         || messages.len() > MAX_CONVERSATION_MESSAGES
         || messages
             .iter()
-            .any(|message| message.content.trim().is_empty())
+            .any(|message| message.content.is_effectively_empty())
     {
         return Err(ActionServiceError::Validation(
             "对话上下文格式无效或轮次过多".to_owned(),
         ));
     }
     let total_chars = messages.iter().fold(0usize, |total, message| {
-        total.saturating_add(message.content.chars().count())
+        total.saturating_add(message.content.text_char_count())
     });
     if total_chars > CONVERSATION_CONTEXT_LIMIT {
         return Err(ActionServiceError::Validation(format!(
@@ -2369,6 +2453,22 @@ mod tests {
         ActionSnapshotStatus, ThinkingCapability, ThinkingCapabilitySource, ThinkingDialect,
         ThinkingLevel,
     };
+
+    /// Textual view of a message for assertions; multimodal messages surface
+    /// their text part.
+    fn text_of(message: &ChatMessage) -> &str {
+        match &message.content {
+            ChatContent::Text(text) => text,
+            ChatContent::Parts(parts) => parts
+                .iter()
+                .find_map(|part| match part {
+                    ChatPart::Text { text } => Some(text.as_str()),
+                    ChatPart::ImageUrl { .. } => None,
+                })
+                .unwrap_or(""),
+        }
+    }
+
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Barrier,
@@ -2400,6 +2500,7 @@ mod tests {
             text: "fixture source".to_owned(),
             cursor: None,
             target_language: None,
+            image_base64: None,
         }
     }
 
@@ -2441,6 +2542,7 @@ mod tests {
             text: text.to_owned(),
             cursor: None,
             target_language: None,
+            image_base64: None,
         }
     }
 
@@ -2921,7 +3023,7 @@ mod tests {
             "这是测试。",
             &settings,
             None,
-            "request-translate",
+            "request-translate", false,
         )
         .unwrap();
         assert!(translated.system.starts_with(
@@ -2937,7 +3039,7 @@ mod tests {
             "An explanation.",
             &settings,
             None,
-            "request-chinese",
+            "request-chinese", false,
         )
         .unwrap();
         assert!(translated_to_chinese.user.contains("Chinese (Simplified)"));
@@ -2947,7 +3049,7 @@ mod tests {
             "これはテストです。",
             &settings,
             None,
-            "request-japanese",
+            "request-japanese", false,
         )
         .unwrap();
         assert!(japanese_to_chinese.user.contains("Chinese (Simplified)"));
@@ -2957,7 +3059,7 @@ mod tests {
             "这是测试。",
             &settings,
             Some(TranslationLanguage::FrFr),
-            "request-explicit",
+            "request-explicit", false,
         )
         .unwrap();
         assert!(explicitly_french.user.contains("French"));
@@ -2970,7 +3072,7 @@ mod tests {
             .find(|action| action.id == "translate")
             .unwrap();
         let swapped_pair =
-            build_prompt(translate, "这是测试。", &settings, None, "request-swapped").unwrap();
+            build_prompt(translate, "这是测试。", &settings, None, "request-swapped", false).unwrap();
         assert!(swapped_pair.user.contains("English"));
 
         settings.locale = Locale::EnUs;
@@ -2980,7 +3082,7 @@ mod tests {
                 .iter()
                 .find(|action| action.id == id)
                 .unwrap();
-            let built = build_prompt(action, "source", &settings, None, "request-output").unwrap();
+            let built = build_prompt(action, "source", &settings, None, "request-output", false).unwrap();
             assert!(built.system.starts_with(
                 "Follow the user's editable instruction exactly and answer in English unless the instruction explicitly requests another language."
             ));
@@ -2999,7 +3101,7 @@ mod tests {
             "Original **Markdown**",
             &settings,
             None,
-            "request-refine",
+            "request-refine", false,
         )
         .unwrap();
         assert_eq!(
@@ -3018,7 +3120,7 @@ mod tests {
                 .iter()
                 .find(|value| value.id == id)
                 .unwrap();
-            let built = build_prompt(action, source, &settings, None, "request-a").unwrap();
+            let built = build_prompt(action, source, &settings, None, "request-a", false).unwrap();
             assert!(built.user.contains(source));
             assert_eq!(built.user.matches("{{target_language}}").count(), 1);
             assert_eq!(built.user.matches("{{language}}").count(), 1);
@@ -3049,7 +3151,7 @@ mod tests {
                 .iter()
                 .find(|value| value.id == id)
                 .unwrap();
-            let built = build_prompt(action, injection, &settings, None, "request-b").unwrap();
+            let built = build_prompt(action, injection, &settings, None, "request-b", false).unwrap();
             assert!(built.user.contains(injection));
             assert!(built
                 .system
@@ -3078,10 +3180,54 @@ mod tests {
         assert_eq!(resolved.session_data.route.provider.id, "provider-a");
         assert_eq!(resolved.session_data.route.model, "model-a");
         assert_eq!(resolved.session_data.route.thinking.mode, ThinkingMode::Off);
-        assert!(resolved.session_data.last_messages[1]
-            .content
-            .contains("zh-CN"));
+        assert!(text_of(&resolved.session_data.last_messages[1]).contains("zh-CN"));
         assert_eq!(first.providers[0].id, "provider-b");
+    }
+
+    #[test]
+    fn screenshot_extract_request_builds_multimodal_messages() {
+        let mut settings = configured_settings("provider-a", "model-a", ThinkingMode::Off);
+        let extract = settings
+            .actions
+            .iter_mut()
+            .find(|action| action.kind == ActionKind::Extract)
+            .expect("built-in extract action");
+        extract.provider_id = Some("provider-a".to_owned());
+        extract.model_id = Some("model-a".to_owned());
+        let mut request = configured_request("extract", "[截图]");
+        request.image_base64 = Some("aGVsbG8=".to_owned());
+        assert!(validate_request_shape(&request).is_ok());
+
+        let seed = FrozenPreparationSeed::Initial {
+            request: FrozenActionRequest::from(&request),
+        };
+        let ticket = request_ticket("request-extract");
+        let resolved =
+            resolve_request_config(&seed, &settings, &ticket).expect("extract resolves");
+        assert_eq!(resolved.session_data.route.model, "model-a");
+        match &resolved.session_data.last_messages[1].content {
+            ChatContent::Parts(parts) => {
+                assert_eq!(parts.len(), 2, "text + image parts expected");
+                assert!(
+                    matches!(&parts[0], ChatPart::Text { text } if text.contains("提取")),
+                    "editable prompt rides as the text part: {parts:?}"
+                );
+                assert!(matches!(
+                    &parts[1],
+                    ChatPart::ImageUrl { image_url }
+                        if image_url.url == "data:image/png;base64,aGVsbG8="
+                ));
+            }
+            ChatContent::Text(text) => {
+                panic!("extract request should carry an image part, got text: {text}")
+            }
+        }
+
+        // An image-only request passes shape validation even with empty text.
+        request.text = String::new();
+        assert!(validate_request_shape(&request).is_ok());
+        request.image_base64 = None;
+        assert!(validate_request_shape(&request).is_err());
     }
 
     #[test]
@@ -3093,7 +3239,7 @@ mod tests {
             .find(|action| action.kind == ActionKind::Summary)
             .unwrap();
         let oversized = "x".repeat(AI_TEXT_LIMIT + 1);
-        assert!(build_prompt(action, &oversized, &settings, None, "request-limit").is_err());
+        assert!(build_prompt(action, &oversized, &settings, None, "request-limit", false).is_err());
 
         let mut repeated = action.clone();
         repeated.prompt = Some(format!(
@@ -3101,7 +3247,7 @@ mod tests {
             TEXT_PLACEHOLDER, TEXT_PLACEHOLDER, TEXT_PLACEHOLDER
         ));
         let text = "x".repeat(18_000);
-        assert!(build_prompt(&repeated, &text, &settings, None, "request-limit").is_err());
+        assert!(build_prompt(&repeated, &text, &settings, None, "request-limit", false).is_err());
     }
 
     #[test]
@@ -3113,13 +3259,14 @@ mod tests {
             .find(|action| action.kind == ActionKind::Explain)
             .unwrap();
         let source = "🙂".repeat(AI_TEXT_LIMIT);
-        assert!(build_prompt(action, &source, &settings, None, "scalar-limit").is_ok());
+        assert!(build_prompt(action, &source, &settings, None, "scalar-limit", false).is_ok());
         assert!(build_prompt(
             action,
             &format!("{source}🙂"),
             &settings,
             None,
-            "scalar-limit"
+            "scalar-limit",
+            false
         )
         .is_err());
     }
@@ -3134,13 +3281,13 @@ mod tests {
         let messages = build_follow_up_messages(&committed, "  请解释第二个词  ").unwrap();
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[0].role, ChatRole::Assistant);
-        assert_eq!(messages[0].content, "先前的翻译结果");
+        assert_eq!(text_of(&messages[0]), "先前的翻译结果");
         assert_eq!(messages[1].role, ChatRole::User);
-        assert_eq!(messages[1].content, "第一个追问");
+        assert_eq!(text_of(&messages[1]), "第一个追问");
         assert_eq!(messages[2].role, ChatRole::Assistant);
-        assert_eq!(messages[2].content, "第一个追问的回答");
+        assert_eq!(text_of(&messages[2]), "第一个追问的回答");
         assert_eq!(messages[3].role, ChatRole::User);
-        assert_eq!(messages[3].content, "请解释第二个词");
+        assert_eq!(text_of(&messages[3]), "请解释第二个词");
     }
 
     #[test]
@@ -3149,9 +3296,9 @@ mod tests {
         let messages = build_ask_continue_messages(seed, &[], "这句话什么意思？").unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, ChatRole::System);
-        assert!(messages[0].content.contains("选中的句子"));
+        assert!(text_of(&messages[0]).contains("选中的句子"));
         assert_eq!(messages[1].role, ChatRole::User);
-        assert_eq!(messages[1].content, "这句话什么意思？");
+        assert_eq!(text_of(&messages[1]), "这句话什么意思？");
 
         let after_first = vec![
             ChatMessage::system(seed.to_owned()),
@@ -3161,9 +3308,9 @@ mod tests {
         let second = build_ask_continue_messages(seed, &after_first, "能再详细点吗？").unwrap();
         assert_eq!(second.len(), 4);
         assert_eq!(second[0].role, ChatRole::System);
-        assert!(second[0].content.contains("选中的句子"));
+        assert!(text_of(&second[0]).contains("选中的句子"));
         assert_eq!(second[3].role, ChatRole::User);
-        assert_eq!(second[3].content, "能再详细点吗？");
+        assert_eq!(text_of(&second[3]), "能再详细点吗？");
     }
 
     #[test]
@@ -3206,6 +3353,7 @@ mod tests {
             text: "选中的句子".to_owned(),
             cursor: None,
             target_language: None,
+            image_base64: None,
         };
         // open_ask only needs request shape; AppHandle is unused.
         // Use a dummy path via open on SessionTable through service without app:
@@ -3274,12 +3422,10 @@ mod tests {
             resolved.session_data.last_messages[0].role,
             ChatRole::System
         );
-        assert!(resolved.session_data.last_messages[0]
-            .content
-            .contains("选中的句子"));
+        assert!(text_of(&resolved.session_data.last_messages[0]).contains("选中的句子"));
         assert_eq!(resolved.session_data.last_messages[1].role, ChatRole::User);
         assert_eq!(
-            resolved.session_data.last_messages[1].content,
+            text_of(&resolved.session_data.last_messages[1]),
             "这句话什么意思？"
         );
     }
@@ -3473,7 +3619,7 @@ mod tests {
             ChatRole::Assistant
         );
         assert_eq!(
-            context.committed_messages.last().unwrap().content,
+            text_of(context.committed_messages.last().unwrap()),
             "partial final"
         );
     }
@@ -3523,6 +3669,7 @@ mod tests {
             text: "这是测试。".to_owned(),
             cursor: None,
             target_language: None,
+            image_base64: None,
         };
 
         let ticket = RequestTicket {
@@ -3568,11 +3715,7 @@ mod tests {
         );
         assert_eq!(prepared.session_data.route.model, "model-two");
         assert_eq!(prepared.api_key, "local-test-key");
-        assert!(prepared.session_data.last_messages[1]
-            .content
-            .contains("这是测试。"));
-        assert!(prepared.session_data.last_messages[1]
-            .content
-            .contains("English"));
+        assert!(text_of(&prepared.session_data.last_messages[1]).contains("这是测试。"));
+        assert!(text_of(&prepared.session_data.last_messages[1]).contains("English"));
     }
 }

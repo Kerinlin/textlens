@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal permissions shared by TextLens local renderer windows",
-  "windows": ["settings", "selection-toolbar", "selection-result-*"],
+  "description": "Minimal permissions shared by Flick local renderer windows",
+  "windows": ["settings", "selection-toolbar", "selection-result-*", "screenshot-overlay", "shot-pin-*"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",

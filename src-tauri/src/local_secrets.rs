@@ -26,10 +26,14 @@ const FORMAT_VERSION: u8 = 1;
 const KEY_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 12;
 const MAX_ENCRYPTED_FILE_SIZE: u64 = 1_048_576;
-const ASSOCIATED_DATA: &[u8] = b"com.local.textlens/api-keys/v1";
-// Keep the historical AAD literal so existing installations can decrypt API
-// keys written before the TextLens product rename.
-const LEGACY_V1_ASSOCIATED_DATA: &[u8] = b"com.local.selectionbar/api-keys/v1";
+const ASSOCIATED_DATA: &[u8] = b"com.local.flick/api-keys/v1";
+// Keep historical AAD literals so existing installations can decrypt API keys
+// written before product renames.
+const LEGACY_ASSOCIATED_DATA: &[&[u8]] = &[
+    b"com.local.onelenth/api-keys/v1",
+    b"com.local.textlens/api-keys/v1",
+    b"com.local.selectionbar/api-keys/v1",
+];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -167,15 +171,25 @@ fn decrypt_entries(
     nonce_bytes: &[u8],
     key_bytes: &[u8; KEY_LENGTH],
 ) -> Result<HashMap<String, String>, SettingsError> {
-    let mut legacy_ciphertext = ciphertext.to_vec();
-    decrypt_entries_with_aad(ciphertext, nonce_bytes, key_bytes, ASSOCIATED_DATA).or_else(|_| {
-        decrypt_entries_with_aad(
+    if let Ok(entries) =
+        decrypt_entries_with_aad(ciphertext, nonce_bytes, key_bytes, ASSOCIATED_DATA)
+    {
+        return Ok(entries);
+    }
+    let mut last_error = SettingsError::SecretStorage;
+    for associated_data in LEGACY_ASSOCIATED_DATA {
+        let mut legacy_ciphertext = ciphertext.to_vec();
+        match decrypt_entries_with_aad(
             &mut legacy_ciphertext,
             nonce_bytes,
             key_bytes,
-            LEGACY_V1_ASSOCIATED_DATA,
-        )
-    })
+            associated_data,
+        ) {
+            Ok(entries) => return Ok(entries),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
 }
 
 fn decrypt_entries_with_aad(
@@ -421,10 +435,14 @@ mod tests {
         );
         assert_eq!(FORMAT_VERSION, 1);
         assert_eq!(
-            LEGACY_V1_ASSOCIATED_DATA,
-            b"com.local.selectionbar/api-keys/v1"
+            LEGACY_ASSOCIATED_DATA,
+            &[
+                &b"com.local.onelenth/api-keys/v1"[..],
+                &b"com.local.textlens/api-keys/v1"[..],
+                &b"com.local.selectionbar/api-keys/v1"[..]
+            ]
         );
-        assert_eq!(ASSOCIATED_DATA, b"com.local.textlens/api-keys/v1");
+        assert_eq!(ASSOCIATED_DATA, b"com.local.flick/api-keys/v1");
         assert_eq!(ENCRYPTED_SECRETS_FILE_NAME, "api-keys.enc.json");
         assert_eq!(LOCAL_SECRET_KEY_FILE_NAME, ".api-keys.key");
     }

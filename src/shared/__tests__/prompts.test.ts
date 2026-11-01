@@ -31,7 +31,7 @@ const action = (kind: ActionKind): ActionDefinition => {
 }
 
 describe('prompt builder', () => {
-  it('exposes the editable built-in defaults while keeping the TextLens custom default', () => {
+  it('exposes the editable built-in defaults while keeping the Flick custom default', () => {
     expect(DEFAULT_ACTION_PROMPTS.translate).toBe(
       `You are a professional multilingual translator. Translate only the content inside \`<translate_input>\` into \`{{target_language}}\`.
 

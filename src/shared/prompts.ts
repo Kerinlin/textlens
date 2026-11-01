@@ -118,7 +118,9 @@ export function buildActionPrompt(
   assertAiTextWithinLimit(text, maxTextLength)
   const outputLocale = options.outputLocale ?? DEFAULT_LOCALE
 
-  if (!action.prompt.includes(TEXT_PLACEHOLDER)) {
+  // Image-input actions (extract) carry the capture as a multimodal part
+  // and have no text placeholder requirement.
+  if (action.kind !== 'extract' && !action.prompt.includes(TEXT_PLACEHOLDER)) {
     throw new PromptBuildError(
       'INVALID_CUSTOM_PROMPT',
       `AI 提示词必须包含 ${TEXT_PLACEHOLDER}`

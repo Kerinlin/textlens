@@ -342,7 +342,7 @@ fn restore_windows_clipboard_snapshot(
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
-            w!("TextLens Clipboard Restore Owner"),
+            w!("Flick Clipboard Restore Owner"),
             WINDOW_STYLE(0),
             0,
             0,
@@ -696,7 +696,7 @@ fn trace_windows_clipboard_text_status(sequence: u32, status: &'static str) {
 
     let trace_directory = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .map(|directory| directory.join("TextLens"));
+        .map(|directory| directory.join("Flick"));
     let environment_enabled = std::env::var_os("TEXTLENS_SELECTION_TRACE").is_some_and(|value| {
         let value = value.to_string_lossy();
         value == "1" || value.eq_ignore_ascii_case("true")
@@ -861,7 +861,7 @@ fn write_to_windows_clipboard(text: &str) -> Result<(), String> {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
-            w!("TextLens Clipboard Owner"),
+            w!("Flick Clipboard Owner"),
             WINDOW_STYLE(0),
             0,
             0,

@@ -4,5 +4,7 @@
 <dict>
   <key>LSUIElement</key>
   <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Flick 需要屏幕录制权限，才能按快捷键截取屏幕区域、标注并提取其中的文字。</string>
 </dict>
 </plist>

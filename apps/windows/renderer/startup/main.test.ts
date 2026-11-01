@@ -8,9 +8,9 @@ const startupCss = readFileSync('apps/windows/renderer/startup/startup.css', 'ut
 
 describe('startupNoticeText', () => {
   it('uses a distinct message for ordinary and repeated launches', () => {
-    expect(startupNoticeText('?kind=started')).toBe('TextLens 已启动')
-    expect(startupNoticeText('?kind=running')).toBe('TextLens 已在运行')
-    expect(startupNoticeText('')).toBe('TextLens 已启动')
+    expect(startupNoticeText('?kind=started')).toBe('Flick 已启动')
+    expect(startupNoticeText('?kind=running')).toBe('Flick 已在运行')
+    expect(startupNoticeText('')).toBe('Flick 已启动')
   })
 
   it('holds for one second and fades during the final half second', () => {

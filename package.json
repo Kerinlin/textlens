@@ -1,11 +1,11 @@
 {
-  "name": "textlens",
-  "productName": "TextLens",
+  "name": "flick",
+  "productName": "Flick",
   "version": "0.4.0",
   "private": true,
-  "description": "TextLens, a lightweight macOS and Windows selection assistant built with Tauri.",
+  "description": "Flick, a lightweight macOS and Windows selection assistant built with Tauri.",
   "type": "module",
-  "author": "TextLens contributors",
+  "author": "Flick contributors",
   "license": "UNLICENSED",
   "packageManager": "pnpm@11.7.0",
   "engines": {

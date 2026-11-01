@@ -18,11 +18,11 @@ const cargoLock = readFileSync(join(root, 'src-tauri', 'Cargo.lock'), 'utf8')
 
 const effectiveWindowsConfig = mergeConfig(tauriConfig, windowsConfig)
 const expectedVersion = packageJson.version
-const expectedIdentifier = 'com.local.textlens'
+const expectedIdentifier = 'com.local.flick'
 const expectedTarget = 'x86_64-pc-windows-msvc'
 const expectedMachine = 0x8664
-const productName = effectiveWindowsConfig.productName ?? packageJson.productName ?? 'TextLens'
-const cargoPackageName = cargoPackageField(cargoToml, 'name') ?? 'textlens'
+const productName = effectiveWindowsConfig.productName ?? packageJson.productName ?? 'Flick'
+const cargoPackageName = cargoPackageField(cargoToml, 'name') ?? 'flick'
 const configuredTargetRoot = process.env.CARGO_TARGET_DIR
 const targetRoot = configuredTargetRoot
   ? isAbsolute(configuredTargetRoot)
@@ -65,10 +65,10 @@ function cargoPackageField(contents, field) {
   return packageSection.match(new RegExp(`^${field}\\s*=\\s*"([^"]+)"`, 'mu'))?.[1]
 }
 
-function textlensLockVersion(contents) {
+function packageLockVersion(contents) {
   const packageBlocks = contents.split(/\n(?=\[\[package\]\])/u)
   for (const block of packageBlocks) {
-    if (/^name\s*=\s*"textlens"$/mu.test(block)) {
+    if (/^name\s*=\s*"flick"$/mu.test(block)) {
       return block.match(/^version\s*=\s*"([^"]+)"$/mu)?.[1]
     }
   }
@@ -111,7 +111,7 @@ function sameMembers(actual, expected) {
 }
 
 const cargoVersion = cargoPackageField(cargoToml, 'version')
-const lockVersion = textlensLockVersion(cargoLock)
+const lockVersion = packageLockVersion(cargoLock)
 if (typeof expectedVersion !== 'string' || !/^\d+\.\d+\.\d+$/u.test(expectedVersion)) {
   errors.push(`package.json 版本不是有效的三段式版本号：${expectedVersion ?? '未找到'}`)
 }
@@ -185,8 +185,8 @@ if (
 if (nsis.displayLanguageSelector !== false || nsis.compression !== 'lzma') {
   errors.push('NSIS 必须关闭语言选择器并使用 lzma 压缩')
 }
-if (nsis.startMenuFolder !== 'TextLens') {
-  errors.push('NSIS 开始菜单目录必须为 TextLens')
+if (nsis.startMenuFolder !== 'Flick') {
+  errors.push('NSIS 开始菜单目录必须为 Flick')
 }
 const windowsBuildCommand = packageJson.scripts?.['build:windows'] ?? ''
 for (const requiredArgument of [

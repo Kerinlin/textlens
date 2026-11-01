@@ -1,5 +1,6 @@
 pub mod actions;
 mod clipboard;
+mod screenshot;
 mod local_secrets;
 pub mod models;
 mod openai_protocol;
@@ -87,6 +88,7 @@ pub fn run() {
             let state = handle.state::<RuntimeState>();
             state.reconcile_capture(&handle);
             state.reconcile_shortcut(&handle);
+            state.reconcile_screenshot_shortcut(&handle);
             runtime::start_permission_poll(handle.clone());
             #[cfg(target_os = "macos")]
             if !SelectionMonitor::is_accessibility_trusted() {
@@ -151,12 +153,18 @@ pub fn run() {
             runtime::retry_action,
             runtime::continue_action,
             runtime::copy_text,
+            runtime::capture_screenshot_region,
+            runtime::copy_screenshot,
+            runtime::pin_screenshot,
+            runtime::get_shot_pin_payload,
+            runtime::run_screenshot_action,
+            runtime::cancel_screenshot,
             runtime::open_external,
             runtime::hide_result,
             runtime::close_result,
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build TextLens")
+        .expect("failed to build Flick")
         .run(|app, event| {
             if matches!(
                 event,

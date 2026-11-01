@@ -28,6 +28,7 @@ const ACTION_KIND_NAMES: Readonly<Record<ActionKind, string>> = {
   explain: '解释',
   refine: '润色',
   ask: '问AI',
+  extract: '图片处理',
   custom: '自定义 AI'
 }
 
@@ -41,7 +42,8 @@ function defaultPrompt(kind: ActionKind): string {
     kind === 'summary' ||
     kind === 'explain' ||
     kind === 'refine' ||
-    kind === 'ask'
+    kind === 'ask' ||
+    kind === 'extract'
   ) {
     return DEFAULT_ACTION_PROMPTS[kind]
   }
@@ -209,7 +211,9 @@ export function CustomActionDialog({
     if (!isLucideIconName(icon)) return setError('请选择有效的 Lucide 图标')
 
     if (isAiKind(kind)) {
-      if (!cleanPrompt.includes(TEXT_PLACEHOLDER)) {
+      // Image-input actions receive the capture as a multimodal part, so
+      // their prompt has no text placeholder to substitute.
+      if (kind !== 'extract' && !cleanPrompt.includes(TEXT_PLACEHOLDER)) {
         return setError(`提示词必须包含 ${TEXT_PLACEHOLDER}`)
       }
       if (cleanPrompt.length > 10_000) return setError('提示词不能超过 10,000 个字符')
@@ -285,9 +289,11 @@ export function CustomActionDialog({
             <p>
               {kind === 'search'
                 ? '搜索动作可选择默认搜索引擎；选中网址时仍会直接打开。'
-                : isAiKind(kind)
-                  ? '同一种动作可以添加多次，并分别绑定服务商、模型和提示词。'
-                  : '可调整名称、类型与图标；本地动作无需配置模型。'}
+                : kind === 'extract'
+                  ? '图片处理动作作用于截图：截图作为图片随提示词发给模型，结果出现在截图工具栏触发的结果窗口。'
+                  : isAiKind(kind)
+                    ? '同一种动作可以添加多次，并分别绑定服务商、模型和提示词。'
+                    : '可调整名称、类型与图标；本地动作无需配置模型。'}
             </p>
           </div>
           <button className="icon-button" type="button" aria-label="关闭" onClick={onCancel}>
@@ -421,10 +427,12 @@ export function CustomActionDialog({
                       <RotateCcw size={13} aria-hidden="true" />
                       恢复默认提示词
                     </button>
-                    <button className="placeholder-button" type="button" onClick={insertPlaceholder}>
-                      <Braces size={13} aria-hidden="true" />
-                      插入 {TEXT_PLACEHOLDER}
-                    </button>
+                    {kind !== 'extract' && (
+                      <button className="placeholder-button" type="button" onClick={insertPlaceholder}>
+                        <Braces size={13} aria-hidden="true" />
+                        插入 {TEXT_PLACEHOLDER}
+                      </button>
+                    )}
                   </span>
                 </span>
                 <textarea
@@ -440,7 +448,9 @@ export function CustomActionDialog({
                   }}
                 />
                 <span className="field__hint">
-                  默认提示词可以直接修改；恢复默认后需保存设置才会生效；{TEXT_PLACEHOLDER} 会替换为选中文本。
+                  {kind === 'extract'
+                    ? '截图工具栏会对每张截图运行此动作：截图作为图片随提示词一起发送给模型，仅出现在截图工具栏。'
+                    : `默认提示词可以直接修改；恢复默认后需保存设置才会生效；${TEXT_PLACEHOLDER} 会替换为选中文本。`}
                 </span>
               </label>
             </>

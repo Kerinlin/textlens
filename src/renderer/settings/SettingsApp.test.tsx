@@ -208,7 +208,7 @@ describe('SettingsApp provider deletion', () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1))
     expect(updateSettings.mock.calls[0]?.[0].application).toEqual({ closeBehavior: 'quit' })
 
-    expect(screen.queryByRole('button', { name: '退出 TextLens' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '退出 Flick' })).not.toBeInTheDocument()
   })
 
   it('fades a successful save after 1.4 seconds and removes it after 2 seconds', async () => {
@@ -298,7 +298,7 @@ describe('SettingsApp provider deletion', () => {
 
     await screen.findByRole('heading', { name: '辅助功能权限' })
     expect(screen.queryByRole('combobox', { name: '关闭主窗口时' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '退出 TextLens' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '退出 Flick' })).not.toBeInTheDocument()
   })
 
   it('keeps settings editable when the accessibility diagnostic IPC fails', async () => {
@@ -345,9 +345,9 @@ describe('SettingsApp provider deletion', () => {
     })
 
     act(() => requestClose?.())
-    expect(screen.getByRole('dialog', { name: '退出 TextLens？' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '退出 Flick？' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    expect(screen.queryByRole('dialog', { name: '退出 TextLens？' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '退出 Flick？' })).not.toBeInTheDocument()
     expect(quitApp).not.toHaveBeenCalled()
 
     act(() => requestClose?.())
@@ -428,7 +428,7 @@ describe('SettingsApp provider deletion', () => {
         canRequest: false,
         available: false,
         diagnostics: {
-          selectionMonitorError: '无法启动系统划词监听。请重新启动 TextLens。',
+          selectionMonitorError: '无法启动系统划词监听。请重新启动 Flick。',
           shortcutError: '全局快捷键注册失败，可能已被其他应用占用。'
         }
       })),
@@ -439,7 +439,7 @@ describe('SettingsApp provider deletion', () => {
     render(<SettingsApp />)
 
     expect(await screen.findByText('选区访问不可用')).toBeInTheDocument()
-    expect(screen.getByText('无法启动系统划词监听。请重新启动 TextLens。')).toBeInTheDocument()
+    expect(screen.getByText('无法启动系统划词监听。请重新启动 Flick。')).toBeInTheDocument()
     expect(screen.getByText('全局快捷键不可用')).toBeInTheDocument()
     expect(screen.getByText('全局快捷键注册失败，可能已被其他应用占用。')).toBeInTheDocument()
     expect(screen.queryByText('选区访问可用')).not.toBeInTheDocument()

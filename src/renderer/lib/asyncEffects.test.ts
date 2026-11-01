@@ -27,7 +27,7 @@ describe('runDetached', () => {
 
     await Promise.resolve()
 
-    expect(warn).toHaveBeenCalledWith('[TextLens][renderer]', {
+    expect(warn).toHaveBeenCalledWith('[Flick][renderer]', {
       scope: 'toolbar',
       operation: 'hide',
       errorClass: 'Error'

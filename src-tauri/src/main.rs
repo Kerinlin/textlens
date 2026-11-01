@@ -2,8 +2,8 @@
 
 fn main() {
     #[cfg(target_os = "windows")]
-    if textlens_lib::selection::run_windows_selection_helper_if_requested() {
+    if flick_lib::selection::run_windows_selection_helper_if_requested() {
         return;
     }
-    textlens_lib::run();
+    flick_lib::run();
 }

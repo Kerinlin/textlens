@@ -27,7 +27,7 @@ if (typeof version !== 'string' || !/^(?:\d+\.){2,3}\d+$/u.test(version)) {
 }
 
 const exportRoot = join(root, 'portable-dev-sources')
-const bundleName = `TextLens-${version}-dev-source`
+const bundleName = `flick-${version}-dev-source`
 const outputDirectory = join(exportRoot, bundleName)
 
 const includeEntries = [

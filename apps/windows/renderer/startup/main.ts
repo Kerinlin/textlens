@@ -3,8 +3,8 @@ import './startup.css'
 
 export function startupNoticeText(search: string): string {
   return new URLSearchParams(search).get('kind') === 'running'
-    ? 'TextLens 已在运行'
-    : 'TextLens 已启动'
+    ? 'Flick 已在运行'
+    : 'Flick 已启动'
 }
 
 const root = document.querySelector<HTMLElement>('#root')

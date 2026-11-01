@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const tauriConfig = JSON.parse(readFileSync(join(root, 'src-tauri/tauri.conf.json'), 'utf8'))
-const productName = tauriConfig.productName ?? packageJson.productName ?? 'TextLens'
+const productName = tauriConfig.productName ?? packageJson.productName ?? 'Flick'
 const expectedVersion = tauriConfig.version ?? packageJson.version
 const expectedIdentifier = tauriConfig.identifier
 const expectedMinimumVersion = tauriConfig.bundle?.macOS?.minimumSystemVersion ?? '12.0'

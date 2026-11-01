@@ -29,8 +29,9 @@ use crate::models::{
 
 const SECRET_ACCOUNT_PREFIX: &str = "provider-api-key:";
 const MAX_API_KEY_LENGTH: usize = 16_384;
-// Historical directory name retained only for one-time product rename migration.
-const LEGACY_APP_CONFIG_DIRECTORY: &str = "com.local.selectionbar";
+// Historical directory names retained only for one-time product rename migration.
+const LEGACY_APP_CONFIG_DIRECTORIES: &[&str] =
+    &["com.local.onelenth", "com.local.textlens", "com.local.selectionbar"];
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
@@ -182,6 +183,9 @@ impl SettingsRepository {
             if let Some(value) = update.capture_shortcut {
                 settings.capture_shortcut = value;
             }
+            if let Some(value) = update.screenshot_shortcut {
+                settings.screenshot_shortcut = value;
+            }
             if let Some(value) = update.locale {
                 settings.locale = value;
             }
@@ -230,6 +234,7 @@ impl SettingsRepository {
                 version: SETTINGS_VERSION,
                 enabled: public.enabled,
                 capture_shortcut: public.capture_shortcut,
+                screenshot_shortcut: public.screenshot_shortcut,
                 locale: public.locale,
                 translate: public.translate,
                 toolbar: public.toolbar,
@@ -607,15 +612,16 @@ fn secret_account(provider_id: &str) -> String {
 
 fn legacy_settings_path(settings_path: &Path) -> Option<PathBuf> {
     let current_directory = settings_path.parent()?;
-    if current_directory.file_name()?.to_string_lossy() == LEGACY_APP_CONFIG_DIRECTORY {
+    let current_name = current_directory.file_name()?.to_string_lossy();
+    if LEGACY_APP_CONFIG_DIRECTORIES.contains(&current_name.as_ref()) {
         return None;
     }
-    Some(
-        current_directory
-            .parent()?
-            .join(LEGACY_APP_CONFIG_DIRECTORY)
-            .join(settings_path.file_name()?),
-    )
+    let file_name = settings_path.file_name()?;
+    let parent = current_directory.parent()?;
+    LEGACY_APP_CONFIG_DIRECTORIES.iter().find_map(|directory| {
+        let path = parent.join(directory).join(file_name);
+        path.exists().then_some(path)
+    })
 }
 
 fn has_usable_ai_route(settings: &AppSettings) -> bool {
@@ -670,6 +676,7 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         let mut settings: AppSettings = serde_json::from_value(value)?;
         let persisted_settings = settings.clone();
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let normalized = settings
             .normalize_and_validate()
@@ -685,11 +692,12 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
             must_persist,
         });
     }
-    if version == Some(11) {
+    if version == Some(12) || version == Some(11) {
         migrate_v10_search_actions_value(&mut value);
         migrate_quote_to_ask_value(&mut value);
         let mut settings: AppSettings = serde_json::from_value(value)?;
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let settings = settings
             .normalize_and_validate()
@@ -705,6 +713,7 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         migrate_quote_to_ask_value(&mut value);
         let mut settings: AppSettings = serde_json::from_value(value)?;
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let settings = settings
             .normalize_and_validate()
@@ -720,6 +729,7 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         migrate_quote_to_ask_value(&mut value);
         let mut settings: AppSettings = serde_json::from_value(value)?;
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let settings = settings
             .normalize_and_validate()
@@ -736,6 +746,7 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         migrate_quote_to_ask_value(&mut value);
         let mut settings: AppSettings = serde_json::from_value(value)?;
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let settings = settings
             .normalize_and_validate()
@@ -752,6 +763,7 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         migrate_quote_to_ask_value(&mut value);
         let mut settings: AppSettings = serde_json::from_value(value)?;
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let settings = settings
             .normalize_and_validate()
@@ -774,6 +786,7 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         let mut settings: AppSettings = serde_json::from_value(value)?;
         settings.result.dismiss_mode = ResultDismissMode::Blur;
         migrate_default_action_prompts(&mut settings);
+        ensure_builtin_extract_action(&mut settings);
         migrate_search_actions(&mut settings);
         let settings = settings
             .normalize_and_validate()
@@ -798,6 +811,26 @@ fn load_settings(path: &Path) -> Result<LoadedSettings, SettingsError> {
         .cloned()
         .unwrap_or(value);
     migrate_v1(legacy_value)
+}
+
+/// Install the built-in image-input action for settings written before
+/// screenshot extraction became an action. Existing user edits (same id) are
+/// left untouched; the injected entry only fills the gap.
+fn ensure_builtin_extract_action(settings: &mut AppSettings) {
+    let has_extract = settings
+        .actions
+        .iter()
+        .any(|action| action.kind == ActionKind::Extract);
+    if has_extract {
+        return;
+    }
+    let extract = AppSettings::default()
+        .actions
+        .into_iter()
+        .find(|action| action.kind == ActionKind::Extract);
+    if let Some(extract) = extract {
+        settings.actions.push(extract);
+    }
 }
 
 fn migrate_default_action_prompts(settings: &mut AppSettings) {
@@ -1010,6 +1043,7 @@ fn migrate_v1(value: serde_json::Value) -> Result<LoadedSettings, SettingsError>
         version: SETTINGS_VERSION,
         enabled: legacy.enabled,
         capture_shortcut: legacy.capture_shortcut,
+        screenshot_shortcut: "CommandOrControl+Shift+A".to_owned(),
         locale: legacy.locale,
         translate: legacy.translate,
         toolbar: Default::default(),
@@ -1433,9 +1467,9 @@ mod tests {
         let root = tempdir().unwrap();
         let legacy_path = root
             .path()
-            .join(LEGACY_APP_CONFIG_DIRECTORY)
+            .join("com.local.selectionbar")
             .join("settings.json");
-        let current_path = root.path().join("com.local.textlens").join("settings.json");
+        let current_path = root.path().join("com.local.flick").join("settings.json");
         let legacy = SettingsRepository::new(&legacy_path).unwrap();
         configure_ai_repository(&legacy, "legacy-model", "legacy-secret");
         drop(legacy);
@@ -1468,9 +1502,9 @@ mod tests {
         let root = tempdir().unwrap();
         let legacy_path = root
             .path()
-            .join(LEGACY_APP_CONFIG_DIRECTORY)
+            .join("com.local.selectionbar")
             .join("settings.json");
-        let current_path = root.path().join("com.local.textlens").join("settings.json");
+        let current_path = root.path().join("com.local.flick").join("settings.json");
         let legacy = SettingsRepository::new(&legacy_path).unwrap();
         configure_ai_repository(&legacy, "legacy-model", "legacy-secret");
         let current = SettingsRepository::new(&current_path).unwrap();

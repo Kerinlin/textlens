@@ -28,7 +28,16 @@ import {
 describe('settings schemas and defaults', () => {
   it('provides v12 defaults with search engine bound to the search action', () => {
     expect(appSettingsSchema.parse(DEFAULT_APP_SETTINGS)).toEqual(DEFAULT_APP_SETTINGS)
-    expect(DEFAULT_APP_SETTINGS.version).toBe(12)
+    expect(DEFAULT_APP_SETTINGS.version).toBe(13)
+    expect(DEFAULT_APP_SETTINGS.toolbar.screenshotItems.map((item) => item.id)).toEqual([
+      'pen',
+      'rect',
+      'arrow',
+      'mosaic',
+      'text',
+      'pin',
+      'done'
+    ])
     expect(DEFAULT_APP_SETTINGS.enabled).toBe(true)
     expect(DEFAULT_APP_SETTINGS.actions.find((action) => action.kind === 'search')).toMatchObject({
       searchEngineId: 'google'
@@ -664,6 +673,37 @@ Return only the translated content. Do not include explanations, labels, tags, o
     expect(migratedCustom.actions.find((action) => action.id === 'explain')).toMatchObject({
       prompt: customExplain
     })
+  })
+
+  it('fills missing screenshot toolbar items without hiding the ones already configured', () => {
+    const migrated = migrateAppSettings({
+      ...DEFAULT_APP_SETTINGS,
+      toolbar: {
+        displayMode: 'icon-only',
+        screenshotItems: [
+          { id: 'copy', enabled: false, order: 0 },
+          { id: 'extract', enabled: true, order: 1 },
+          { id: 'done', enabled: false, order: 2 },
+          { id: 'mosaic', enabled: true, order: 3 }
+        ]
+      }
+    })
+
+    expect(migrated.toolbar.displayMode).toBe('icon-only')
+    expect(migrated.toolbar.screenshotItems.slice(0, 2)).toEqual([
+      { id: 'done', enabled: false, order: 0 },
+      { id: 'mosaic', enabled: true, order: 1 }
+    ])
+    expect(migrated.toolbar.screenshotItems.map((item) => item.id)).toEqual([
+      'done',
+      'mosaic',
+      'pen',
+      'rect',
+      'arrow',
+      'text',
+      'pin'
+    ])
+    expect(migrated.toolbar.screenshotItems.slice(2).every((item) => item.enabled)).toBe(true)
   })
 
   it('migrates v5 settings to the default close behavior and preserves a current choice', () => {

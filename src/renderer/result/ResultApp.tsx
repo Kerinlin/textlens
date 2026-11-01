@@ -667,9 +667,13 @@ function ResultSessionApp({
       setPinned(snapshot.pinned)
       setActiveModelRoute(modelRouteFromSnapshot(snapshot))
       setBootstrapMessage('')
-    } catch {
+    } catch (error) {
       if (!isDisposed()) {
-        setBootstrapMessage('无法连接结果会话，请重试。')
+        // Surface the underlying rejection instead of a generic message so
+        // connection issues are diagnosable from the window itself.
+        const reason = getErrorMessage(error, '未知错误')
+        console.error('[screenshot-action] result bootstrap failed:', error)
+        setBootstrapMessage(`无法连接结果会话：${reason}`)
       }
       return
     }

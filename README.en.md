@@ -1,10 +1,10 @@
-# TextLens
+# Flick
 
 **English** | [中文](./README.md)
 
-TextLens is a lightweight desktop selection assistant for **macOS 12+ Apple Silicon (M-series)** and **Windows 10/11 x64**, built with Tauri 2, Rust, React, and TypeScript.
+Flick is a lightweight desktop selection assistant for **macOS 12+ Apple Silicon (M-series)** and **Windows 10/11 x64**, built with Tauri 2, Rust, React, and TypeScript.
 
-After selecting text in another app, you can copy, search, translate, summarize, explain, polish, Ask AI, or run custom AI actions. On macOS it lives in the menu bar and stays out of the Dock by default. On Windows it runs in the background from the notification area after a brief “TextLens is running” toast; open Settings from the tray menu. TextLens does not store selection history. Selected text is sent to your configured model only when you explicitly run an AI action.
+After selecting text in another app, you can copy, search, translate, summarize, explain, polish, Ask AI, or run custom AI actions. On macOS it lives in the menu bar and stays out of the Dock by default. On Windows it runs in the background from the notification area after a brief “Flick is running” toast; open Settings from the tray menu. Flick does not store selection history. Selected text is sent to your configured model only when you explicitly run an AI action.
 
 Both platforms share the same renderer, settings, actions, model requests, streaming, and data contracts. Only selection capture, clipboard handling, native window attributes, and system integration are platform-specific. Local development, portable source export, and version history are documented in [DEVELOPMENT_HANDBOOK.md](./DEVELOPMENT_HANDBOOK.md) (Chinese).
 
@@ -25,10 +25,10 @@ Both platforms share the same renderer, settings, actions, model requests, strea
 ## Design inspiration and third-party sources
 
 - Product direction and some interaction patterns are inspired by the “selection assistant” workflow in [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio), including the selection toolbar, result window, pin, dismiss-on-blur, re-select, and model switching.
-- Cherry Studio is primarily Electron-based; TextLens uses the lighter Tauri stack to rebuild that workflow as a standalone desktop tool with its own window management, settings storage, model requests, and UI.
+- Cherry Studio is primarily Electron-based; Flick uses the lighter Tauri stack to rebuild that workflow as a standalone desktop tool with its own window management, settings storage, model requests, and UI.
 - The macOS selection-capture bridge is adapted from MIT-licensed [selection-hook 2.0.2](https://github.com/0xfullex/selection-hook/tree/v2.0.2). The full MIT license is in [LICENSE.selection-hook](./LICENSE.selection-hook).
 
-TextLens does not declare its own open-source license. Materials adapted from Cherry Studio remain under upstream AGPL-3.0; selection-hook adaptations remain under MIT. Read the third-party notices before public distribution or derivative work.
+Flick does not declare its own open-source license. Materials adapted from Cherry Studio remain under upstream AGPL-3.0; selection-hook adaptations remain under MIT. Read the third-party notices before public distribution or derivative work.
 
 ## Features
 
@@ -72,7 +72,7 @@ macOS uses system WKWebView; Windows uses Microsoft Edge WebView2 Runtime. Curre
 
 ## Major open-source dependencies
 
-Projects that directly shape TextLens features. Exact versions come from [pnpm-lock.yaml](./pnpm-lock.yaml) and [src-tauri/Cargo.lock](./src-tauri/Cargo.lock). Attribution details are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+Projects that directly shape Flick features. Exact versions come from [pnpm-lock.yaml](./pnpm-lock.yaml) and [src-tauri/Cargo.lock](./src-tauri/Cargo.lock). Attribution details are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 | Project | Role | License |
 | --- | --- | --- |
@@ -143,8 +143,8 @@ Windows builds target Windows 10/11 x64 with standard-user, current-user NSIS in
 1. Run the NSIS installer; if WebView2 Runtime is missing, the bootstrapper is launched automatically.
 2. Unsigned test builds may trigger Microsoft Defender SmartScreen; after verifying SHA-256 you can choose “More info → Run anyway”.
 3. On first launch the app stays in the notification area and does not open Settings automatically; use the tray menu.
-4. Closing Settings with X hides to the tray by default; this can be changed to quit. Full quit is available from the tray menu (“Quit TextLens”).
-5. TextLens does not elevate, so it cannot read selections from admin-elevated apps; normal-privilege apps are fine.
+4. Closing Settings with X hides to the tray by default; this can be changed to quit. Full quit is available from the tray menu (“Quit Flick”).
+5. Flick does not elevate, so it cannot read selections from admin-elevated apps; normal-privilege apps are fine.
 
 The Windows installer is still an unsigned test build and may trigger SmartScreen. Automated checks do not replace real-world app, privilege, and DPI testing. Not suitable for public distribution before code signing and full compatibility acceptance.
 
@@ -152,10 +152,10 @@ The Windows installer is still an unsigned test build and may trigger SmartScree
 
 Only Apple Silicon builds are published; they do not run on Intel Macs.
 
-1. Open the DMG and drag TextLens to Applications.
-2. Fully quit any running older TextLens from the menu bar before installing a new version; the new build is a menu-bar tool and does not appear in the Dock by default.
-3. If Gatekeeper blocks first launch, right-click TextLens in Finder and choose Open, or allow it under System Settings → Privacy & Security.
-4. Enable TextLens under System Settings → Privacy & Security → Accessibility, then restart the app.
+1. Open the DMG and drag Flick to Applications.
+2. Fully quit any running older Flick from the menu bar before installing a new version; the new build is a menu-bar tool and does not appear in the Dock by default.
+3. If Gatekeeper blocks first launch, right-click Flick in Finder and choose Open, or allow it under System Settings → Privacy & Security.
+4. Enable Flick under System Settings → Privacy & Security → Accessibility, then restart the app.
 
 The macOS DMG is still unsigned and not notarized; it is not suitable for direct public distribution. Formal release needs Apple Developer ID signing and notarization.
 
@@ -167,7 +167,7 @@ When distributing source or binaries, retain at least:
 - [LICENSE.selection-hook](./LICENSE.selection-hook)
 - Copyright and license texts required by upstream projects
 
-TextLens currently declares no open-source license and has no Apple Developer ID, Windows Authenticode signing, notarization, or auto-update. Before a formal public release, complete full dependency license inventory, security review, signing, notarization, and install acceptance.
+Flick currently declares no open-source license and has no Apple Developer ID, Windows Authenticode signing, notarization, or auto-update. Before a formal public release, complete full dependency license inventory, security review, signing, notarization, and install acceptance.
 
 ## Friend Links
 

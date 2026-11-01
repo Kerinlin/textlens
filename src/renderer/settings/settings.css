@@ -242,6 +242,38 @@ body {
   margin-top: 12px;
 }
 
+.action-settings-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.action-settings-card + .action-settings-card {
+  margin-top: 16px;
+}
+
+.action-settings-card__intro {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  min-width: 0;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.action-settings-card__intro .search-behavior-note {
+  width: 100%;
+  line-height: 1.55;
+}
+
+.action-settings-card .action-list {
+  height: auto;
+  overflow: hidden;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .section-heading {
   display: flex;
   gap: 20px;
@@ -1002,18 +1034,6 @@ body {
   text-align: right;
 }
 
-.toolbar-preview-card {
-  display: grid;
-  gap: 12px;
-  justify-items: start;
-  padding: 0 3px 16px;
-  margin-bottom: 16px;
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-}
-
 .toolbar-preview__heading {
   display: flex;
   gap: 12px;
@@ -1033,14 +1053,17 @@ body {
 }
 
 .toolbar-preview {
-  display: inline-flex;
+  display: flex;
   align-items: stretch;
-  min-height: 34px;
-  overflow: hidden;
+  max-width: 100%;
+  min-height: 36px;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--surface-muted);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: none;
+  scrollbar-width: thin;
 }
 
 .toolbar-preview__logo,
@@ -1056,10 +1079,23 @@ body {
 }
 
 .toolbar-preview__action {
+  flex: 0 0 auto;
+  min-width: 30px;
   max-width: 118px;
   padding: 0 7px;
   color: var(--text-secondary);
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.toolbar-preview__action > svg {
+  flex: 0 0 auto;
+}
+
+.toolbar-preview__action > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1076,11 +1112,12 @@ body {
 }
 
 .action-dnd-row {
-  display: flex;
-  gap: 9px;
+  display: grid;
+  grid-template-columns: 24px 30px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
   min-height: 60px;
-  padding: 7px 2px;
+  padding: 8px 2px;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -1259,6 +1296,7 @@ body {
 .action-row__copy {
   display: grid;
   flex: 1;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -1271,8 +1309,11 @@ body {
 }
 
 .action-row__copy span {
+  overflow: hidden;
   color: var(--text-tertiary);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .action-row__copy .action-row__prompt {
@@ -1285,6 +1326,7 @@ body {
 .action-row__controls {
   display: flex;
   flex: 0 0 auto;
+  gap: 4px;
   align-items: center;
 }
 

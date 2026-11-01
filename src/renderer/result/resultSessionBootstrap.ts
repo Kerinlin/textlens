@@ -27,7 +27,7 @@ interface HandshakeOutcome {
 }
 
 export function reportBootstrapError(error: unknown, operation: string): void {
-  console.warn('[TextLens][renderer]', {
+  console.warn('[Flick][renderer]', {
     scope: 'result',
     operation,
     errorClass: error instanceof Error ? error.name || 'Error' : typeof error

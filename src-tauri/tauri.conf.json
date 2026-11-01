@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TextLens",
+  "productName": "Flick",
   "version": "0.4.0",
-  "identifier": "com.local.textlens",
+  "identifier": "com.local.flick",
   "build": {
     "beforeBuildCommand": "pnpm build:web",
     "frontendDist": "../dist"
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "settings",
-        "title": "TextLens 设置",
+        "title": "Flick 设置",
         "url": "settings/index.html",
         "width": 920,
         "height": 780,
@@ -39,7 +39,7 @@
     "category": "Productivity",
     "shortDescription": "轻量 macOS 划词助手",
     "longDescription": "选中文本后快速复制、搜索、翻译、解释、总结和优化。",
-    "copyright": "Copyright © 2026 TextLens contributors",
+    "copyright": "Copyright © 2026 Flick contributors",
     "macOS": {
       "infoPlist": "Info.plist",
       "minimumSystemVersion": "12.0",

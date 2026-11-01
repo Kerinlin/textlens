@@ -42,7 +42,7 @@ use crate::{
     },
     settings::SettingsRepository,
     windows::{
-        restore_source_app_activation, result_label, DismissMode, Point as WindowPoint,
+        self, restore_source_app_activation, result_label, DismissMode, Point as WindowPoint,
         ResultWindowOptions, ToolbarPlacement, WindowCoordinator, WindowSize,
     },
 };
@@ -55,8 +55,8 @@ pub const SETTINGS_GUIDANCE_EVENT: &str = "textlens:settings-guidance";
 pub const TOOLBAR_DISMISSED_EVENT: &str = "textlens:toolbar-dismissed";
 
 const SELECTION_MONITOR_START_ERROR: &str =
-    "无法启动系统划词监听。请重新启动 TextLens；若仍然失败，请检查安全软件或系统策略。";
-const SELECTION_MONITOR_DISCONNECTED_ERROR: &str = "系统划词监听意外停止。请重新启动 TextLens。";
+    "无法启动系统划词监听。请重新启动 Flick；若仍然失败，请检查安全软件或系统策略。";
+const SELECTION_MONITOR_DISCONNECTED_ERROR: &str = "系统划词监听意外停止。请重新启动 Flick。";
 const GLOBAL_SHORTCUT_ERROR: &str =
     "全局快捷键注册失败，可能已被其他应用占用。请更换快捷键后重试。";
 
@@ -81,6 +81,7 @@ const TRAY_ID: &str = "textlens-tray";
 const TRAY_TOGGLE_ID: &str = "textlens-toggle";
 const TRAY_PERMISSION_ID: &str = "textlens-permission";
 const TRAY_SETTINGS_ID: &str = "textlens-settings";
+const TRAY_SCREENSHOT_ID: &str = "textlens-screenshot";
 const TRAY_QUIT_ID: &str = "textlens-quit";
 const RESULT_DEFAULT_WIDTH: f64 = 520.0;
 const RESULT_DEFAULT_HEIGHT: f64 = 420.0;
@@ -389,14 +390,64 @@ struct ResultSessionMeta {
     selection: CurrentSelection,
     action_id: String,
     pinned: bool,
+    /// Screenshot-triggered sessions survive stray selection events: hiding
+    /// the capture overlay returns focus to the source app, whose leftover
+    /// text selection can surface as a phantom selection that would
+    /// otherwise close this result before its window finishes connecting.
+    from_screenshot: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ResultSessionStart {
     /// Start network generation immediately (translate/explain/summary/…).
     Execute,
     /// Open a completed empty session and wait for the first question (Ask).
     OpenAsk,
+    /// Send the screenshot capture to an image-input action (extract).
+    Screenshot { image_base64: String },
+}
+
+impl ResultSessionStart {
+    fn image_base64(&self) -> Option<String> {
+        match self {
+            Self::Screenshot { image_base64 } => Some(image_base64.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Stand-in selection metadata for screenshot-triggered result sessions. The
+/// placeholder text shows as the result's source line; a self-referential
+/// source app keeps focus-restore and host-selection cleanup as no-ops.
+/// Values must satisfy the renderer's snapshot schema (non-empty sourceApp
+/// name) or the result window rejects the handshake payload.
+fn screenshot_selection_placeholder() -> CurrentSelection {
+    CurrentSelection {
+        id: Uuid::new_v4().to_string(),
+        payload: SelectionPayload {
+            text: "[截图]".to_owned(),
+            source_app: SourceApplication {
+                bundle_id: "com.local.flick".to_owned(),
+                name: "Flick 截图".to_owned(),
+            },
+            bounds: None,
+            start_top: None,
+            start_bottom: None,
+            end_top: None,
+            end_bottom: None,
+            mouse: SelectionMouse {
+                start: None,
+                end: None,
+                current: SelectionPoint { x: 0.0, y: 0.0 },
+            },
+            direction: SelectionDirection::Unknown,
+            is_fullscreen: false,
+            method: SelectionMethod::Accessibility,
+            trigger: SelectionTrigger::Manual,
+            timestamp_ms: 0,
+        },
+        source_result_session_id: None,
+    }
 }
 
 fn compose_result_ready_snapshot(
@@ -522,6 +573,7 @@ pub struct RuntimeState {
     shortcut_capture_generation: AtomicU64,
     shortcut_switch: Mutex<()>,
     registered_shortcut: Mutex<Option<Shortcut>>,
+    registered_screenshot_shortcut: Mutex<Option<Shortcut>>,
     runtime_diagnostics: Mutex<RuntimeDiagnostics>,
     pending_result_sizes: Mutex<HashMap<String, PendingResultSize>>,
     resize_revision: AtomicU64,
@@ -530,6 +582,10 @@ pub struct RuntimeState {
     settings_renderer_ready: AtomicBool,
     shutting_down: AtomicBool,
     pending_settings_guidance: Mutex<Option<SettingsGuidance>>,
+    /// Pin payloads keyed by shot-pin window label. Each pin webview pulls its
+    /// image by label once its renderer has loaded; entries are removed when
+    /// the pin window is destroyed.
+    shot_pins: Mutex<HashMap<String, crate::screenshot::CapturedShot>>,
 }
 
 impl RuntimeState {
@@ -554,6 +610,7 @@ impl RuntimeState {
             shortcut_capture_generation: AtomicU64::new(0),
             shortcut_switch: Mutex::new(()),
             registered_shortcut: Mutex::new(None),
+            registered_screenshot_shortcut: Mutex::new(None),
             runtime_diagnostics: Mutex::new(RuntimeDiagnostics::default()),
             pending_result_sizes: Mutex::new(HashMap::new()),
             resize_revision: AtomicU64::new(0),
@@ -562,6 +619,7 @@ impl RuntimeState {
             settings_renderer_ready: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
             pending_settings_guidance: Mutex::new(None),
+            shot_pins: Mutex::new(HashMap::new()),
         }
     }
 
@@ -918,7 +976,19 @@ impl RuntimeState {
     }
 
     fn schedule_close_unpinned_results(&self, app: &AppHandle) {
-        let session_ids = self.unpinned_result_session_ids();
+        // A fresh text selection replaces previous selection-driven results,
+        // but screenshot results belong to a capture the user just acted on
+        // and must not be torn down by the phantom selection that follows the
+        // overlay hiding.
+        let session_ids = self
+            .result_sessions
+            .lock()
+            .iter()
+            .filter_map(|(session_id, meta)| {
+                (!meta.from_screenshot && should_close_for_external_selection(meta.pinned))
+                    .then(|| session_id.clone())
+            })
+            .collect::<Vec<_>>();
         if session_ids.is_empty() {
             return;
         }
@@ -1047,6 +1117,67 @@ impl RuntimeState {
             // the replayable source of truth for windows opened afterwards.
             let _ = app.emit(SHORTCUT_ERROR_EVENT, error);
         }
+    }
+
+    pub fn begin_screenshot(&self, app: &AppHandle) {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return;
+        }
+        if let Err(error) = windows::open_screenshot_overlay(app) {
+            eprintln!("failed to open screenshot overlay: {error}");
+        }
+    }
+
+    pub fn reconcile_screenshot_shortcut(&self, app: &AppHandle) {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return;
+        }
+        let requested = self.settings.get_settings().screenshot_shortcut;
+        if let Err(error) = self.switch_screenshot_shortcut(app, &requested) {
+            let _ = app.emit(SHORTCUT_ERROR_EVENT, error);
+        }
+    }
+
+    fn switch_screenshot_shortcut(&self, app: &AppHandle, requested: &str) -> Result<(), String> {
+        let _transaction = self.shortcut_switch.lock();
+        let requested = requested.trim();
+        let requested = if requested.is_empty() {
+            None
+        } else {
+            Some(
+                requested
+                    .parse::<Shortcut>()
+                    .map_err(|_| GLOBAL_SHORTCUT_ERROR.to_owned())?,
+            )
+        };
+        let current = *self.registered_screenshot_shortcut.lock();
+        if current == requested {
+            if let Some(shortcut) = requested {
+                if !app.global_shortcut().is_registered(shortcut) {
+                    app.global_shortcut()
+                        .register(shortcut)
+                        .map_err(|_| GLOBAL_SHORTCUT_ERROR.to_owned())?;
+                }
+            }
+            return Ok(());
+        }
+        if let Some(shortcut) = requested {
+            if self.registered_shortcut.lock().as_ref() == Some(&shortcut) {
+                return Err("截图快捷键不能与划词捕获快捷键相同".to_owned());
+            }
+            if !app.global_shortcut().is_registered(shortcut) {
+                app.global_shortcut()
+                    .register(shortcut)
+                    .map_err(|_| GLOBAL_SHORTCUT_ERROR.to_owned())?;
+            }
+        }
+        if let Some(shortcut) = current {
+            if self.registered_shortcut.lock().as_ref() != Some(&shortcut) {
+                let _ = app.global_shortcut().unregister(shortcut);
+            }
+        }
+        *self.registered_screenshot_shortcut.lock() = requested;
+        Ok(())
     }
 
     fn switch_shortcut(&self, app: &AppHandle, requested: &str) -> Result<String, String> {
@@ -1190,6 +1321,7 @@ impl RuntimeState {
         self.invalidate_shortcut_capture();
         self.reconcile_capture(app);
         self.reconcile_shortcut(app);
+        self.reconcile_screenshot_shortcut(app);
         refresh_tray(app, settings);
         self.windows.update_result_behavior(
             app,
@@ -1251,6 +1383,10 @@ impl RuntimeState {
 
         let shortcut = self.registered_shortcut.lock().take();
         if let Some(shortcut) = shortcut {
+            let _ = app.global_shortcut().unregister(shortcut);
+        }
+        let screenshot_shortcut = self.registered_screenshot_shortcut.lock().take();
+        if let Some(shortcut) = screenshot_shortcut {
             let _ = app.global_shortcut().unregister(shortcut);
         }
 
@@ -1323,7 +1459,7 @@ impl RuntimeState {
         start: ResultSessionStart,
     ) -> Result<(String, String, ResultRevealReceiver), String> {
         if self.shutting_down.load(Ordering::Acquire) {
-            return Err("TextLens 正在退出".to_owned());
+            return Err("Flick 正在退出".to_owned());
         }
         // Different renderer commands can arrive concurrently. Serialize the
         // short create/replace transaction so a newer selection cannot insert
@@ -1343,6 +1479,7 @@ impl RuntimeState {
                 y: cursor.y.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32,
             }),
             target_language: None,
+            image_base64: start.image_base64(),
         };
 
         // A new unpinned result replaces all existing unpinned results, so
@@ -1363,8 +1500,10 @@ impl RuntimeState {
 
         // `execute` starts DNS/TLS/model work immediately and overlaps with
         // window creation. `open_ask` only seeds context without network.
+        // Screenshot sessions stream through the same execute path with the
+        // capture attached as a multimodal part.
         let request_id = match start {
-            ResultSessionStart::Execute => self
+            ResultSessionStart::Execute | ResultSessionStart::Screenshot { .. } => self
                 .actions
                 .execute(app, request)
                 .map_err(|error| error.to_string())?,
@@ -1421,6 +1560,7 @@ impl RuntimeState {
                 selection,
                 action_id: action_id.to_owned(),
                 pinned: result.default_pinned,
+                from_screenshot: matches!(start, ResultSessionStart::Screenshot { .. }),
             },
         );
         let (reveal_sender, reveal_receiver) = oneshot::channel();
@@ -1622,6 +1762,12 @@ impl RuntimeState {
                     self.settings_renderer_ready.store(false, Ordering::Release);
                 }
                 _ => {}
+            }
+            return;
+        }
+        if label.starts_with(windows::SHOT_PIN_PREFIX) {
+            if matches!(event, WindowEvent::Destroyed) {
+                self.shot_pins.lock().remove(label);
             }
             return;
         }
@@ -1841,6 +1987,11 @@ pub fn handle_global_shortcut(app: &AppHandle, shortcut: &Shortcut, event: Short
         return;
     }
     let registered = *state.registered_shortcut.lock();
+    let screenshot_registered = *state.registered_screenshot_shortcut.lock();
+    if screenshot_registered == Some(*shortcut) {
+        state.begin_screenshot(app);
+        return;
+    }
     if registered != Some(*shortcut) {
         return;
     }
@@ -1869,7 +2020,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         tauri::image::Image::from_bytes(include_bytes!("../../apps/windows/icons/32x32.png"))?;
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .tooltip("TextLens")
+        .tooltip("Flick")
         .icon(tray_icon)
         .show_menu_on_left_click(true)
         .on_menu_event(handle_tray_menu_event);
@@ -1900,11 +2051,15 @@ fn build_tray_menu(
         .enabled(permission_enabled)
         .build(app)?;
     let open_settings = MenuItemBuilder::with_id(TRAY_SETTINGS_ID, "打开设置…").build(app)?;
-    let version = MenuItemBuilder::new(format!("TextLens {}", app.package_info().version))
+    let product_name = app.config().product_name.clone().unwrap_or_else(|| {
+        app.package_info().name.clone()
+    });
+    let version = MenuItemBuilder::new(format!("{} {}", product_name, app.package_info().version))
         .enabled(false)
         .build(app)?;
-    let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "退出 TextLens").build(app)?;
-    let menu = MenuBuilder::new(app).item(&toggle);
+    let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, format!("退出 {product_name}")).build(app)?;
+    let screenshot = MenuItemBuilder::with_id(TRAY_SCREENSHOT_ID, "截图").build(app)?;
+    let menu = MenuBuilder::new(app).item(&toggle).item(&screenshot);
     #[cfg(not(target_os = "windows"))]
     let menu = menu.item(&permission);
     menu.separator()
@@ -1942,6 +2097,9 @@ fn handle_tray_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             }
         }
         TRAY_SETTINGS_ID => open_settings_window(app),
+        TRAY_SCREENSHOT_ID => {
+            app.state::<RuntimeState>().begin_screenshot(app);
+        }
         // Keep the tray command as a reliable native escape hatch even if the
         // settings renderer is unhealthy. The settings-page button and the
         // close-behavior confirmation eventually enter this same controller
@@ -2178,6 +2336,205 @@ pub fn update_settings(
     };
     state.after_settings_changed(&app, &public);
     Ok(public)
+}
+
+/// Region selection in logical pixels relative to the screenshot overlay's
+/// client area. The native side owns the logical→physical mapping so every
+/// window stays consistent with its own scale factor and origin.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotRegionInput {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn ensure_screenshot_caller(window: &WebviewWindow) -> Result<(), String> {
+    (window.label() == windows::SCREENSHOT_LABEL)
+        .then_some(())
+        .ok_or_else(|| "仅截图窗口可以执行该操作".to_owned())
+}
+
+#[tauri::command]
+pub async fn capture_screenshot_region(
+    app: AppHandle,
+    window: WebviewWindow,
+    region: ScreenshotRegionInput,
+) -> Result<crate::screenshot::CapturedShot, String> {
+    ensure_screenshot_caller(&window)?;
+    let rect = physical_screenshot_rect(
+        region,
+        &window,
+    )?;
+    windows::hide_screenshot_overlay(&app);
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let shot = tokio::task::spawn_blocking(move || crate::screenshot::capture_region(rect))
+        .await
+        .map_err(|_| "截图失败".to_owned())??;
+    if let Some(overlay) = app.get_webview_window(windows::SCREENSHOT_LABEL) {
+        let _ = overlay.show();
+        let _ = overlay.set_focus();
+    }
+    Ok(shot)
+}
+
+#[tauri::command]
+pub fn copy_screenshot(window: WebviewWindow, png_base64: String) -> Result<(), String> {
+    ensure_screenshot_caller(&window)?;
+    crate::screenshot::copy_png_base64(&png_base64)
+}
+
+#[tauri::command]
+pub fn pin_screenshot(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, RuntimeState>,
+    png_base64: String,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    ensure_screenshot_caller(&window)?;
+    let label =
+        windows::open_shot_pin(&app, width, height).map_err(|error| error.to_string())?;
+    // The pin webview loads asynchronously; pushing the payload as an event at
+    // build time would race its first load, so the renderer pulls by label.
+    state.shot_pins.lock().insert(
+        label,
+        crate::screenshot::CapturedShot {
+            png_base64,
+            width,
+            height,
+        },
+    );
+    let _ = window.hide();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_shot_pin_payload(
+    window: WebviewWindow,
+    state: State<'_, RuntimeState>,
+) -> Result<Option<crate::screenshot::CapturedShot>, String> {
+    ensure_shot_pin_caller(&window)?;
+    Ok(state.shot_pins.lock().get(window.label()).cloned())
+}
+
+fn ensure_shot_pin_caller(window: &WebviewWindow) -> Result<(), String> {
+    window
+        .label()
+        .starts_with(windows::SHOT_PIN_PREFIX)
+        .then_some(())
+        .ok_or_else(|| "仅贴图窗口可以执行该操作".to_owned())
+}
+
+/// Screenshot entry into the standard action pipeline: the capture rides an
+/// image-input action (extract) into the same streaming result window a text
+/// selection uses. The overlay stays up when the action is rejected so the
+/// renderer can surface the reason.
+#[tauri::command]
+pub async fn run_screenshot_action(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, RuntimeState>,
+    action_id: String,
+    png_base64: String,
+) -> Result<RunActionResult, String> {
+    if let Err(message) = ensure_screenshot_caller(&window) {
+        return Ok(RunActionResult::rejected(message));
+    }
+    if state.shutting_down.load(Ordering::Acquire) {
+        return Ok(RunActionResult::rejected("Flick 正在退出"));
+    }
+    if action_id.len() > 64 {
+        return Ok(RunActionResult::rejected("动作标识无效"));
+    }
+    let settings = state.settings.get_settings();
+    let Some(action) = settings
+        .actions
+        .iter()
+        .find(|candidate| candidate.id == action_id && candidate.enabled)
+        .cloned()
+    else {
+        return Ok(RunActionResult::rejected("动作不存在或已停用"));
+    };
+    if action.kind != ActionKind::Extract {
+        return Ok(RunActionResult::rejected("该动作仅支持处理划词文本"));
+    }
+    if png_base64.len() > crate::screenshot::MAX_SCREENSHOT_PNG_BYTES.saturating_mul(2) {
+        return Ok(RunActionResult::rejected("截图数据过大，无法执行动作"));
+    }
+    let cursor = app
+        .cursor_position()
+        .map(|point| WindowPoint {
+            x: point.x as f64,
+            y: point.y as f64,
+        })
+        .unwrap_or(WindowPoint { x: 0.0, y: 0.0 });
+    match state.create_result_session_with(
+        &app,
+        &action.id,
+        &action.name,
+        screenshot_selection_placeholder(),
+        cursor,
+        ResultSessionStart::Screenshot {
+            image_base64: png_base64,
+        },
+    ) {
+        Ok((session_id, _request_id, reveal_receiver)) => {
+            match wait_for_result_reveal_with_timeout(reveal_receiver, RESULT_REVEAL_TIMEOUT).await
+            {
+                Ok(()) => {
+                    windows::hide_screenshot_overlay(&app);
+                    Ok(RunActionResult::accepted(None, None))
+                }
+                Err(message) => {
+                    state.abort_result_reveal(&app, &session_id);
+                    Ok(RunActionResult::rejected(message))
+                }
+            }
+        }
+        Err(message) => Ok(RunActionResult::rejected(message)),
+    }
+}
+
+#[tauri::command]
+pub fn cancel_screenshot(window: WebviewWindow) -> Result<(), String> {
+    ensure_screenshot_caller(&window)?;
+    let _ = window.hide();
+    Ok(())
+}
+
+fn physical_screenshot_rect(
+    input: ScreenshotRegionInput,
+    window: &WebviewWindow,
+) -> Result<crate::screenshot::ScreenshotRect, String> {
+    if !input.x.is_finite()
+        || !input.y.is_finite()
+        || !input.width.is_finite()
+        || !input.height.is_finite()
+    {
+        return Err("截图区域无效".to_owned());
+    }
+    let scale = window
+        .scale_factor()
+        .map_err(|_| "无法读取窗口缩放".to_owned())?;
+    let origin = window
+        .outer_position()
+        .map_err(|_| "无法读取窗口位置".to_owned())?;
+    let width = input.width * scale;
+    let height = input.height * scale;
+    if !(1.0..=f64::from(crate::screenshot::MAX_SCREENSHOT_EDGE)).contains(&width)
+        || !(1.0..=f64::from(crate::screenshot::MAX_SCREENSHOT_EDGE)).contains(&height)
+    {
+        return Err("截图区域无效".to_owned());
+    }
+    Ok(crate::screenshot::ScreenshotRect {
+        x: origin.x.saturating_add((input.x * scale).round() as i32),
+        y: origin.y.saturating_add((input.y * scale).round() as i32),
+        width: width.round() as u32,
+        height: height.round() as u32,
+    })
 }
 
 #[tauri::command]
@@ -2519,7 +2876,7 @@ pub async fn run_action(
         return Ok(RunActionResult::rejected(message));
     }
     if state.shutting_down.load(Ordering::Acquire) {
-        return Ok(RunActionResult::rejected("TextLens 正在退出"));
+        return Ok(RunActionResult::rejected("Flick 正在退出"));
     }
     let Some(selection) = state.current_selection.lock().clone() else {
         return Ok(RunActionResult::rejected("当前没有可用的选中文本"));
@@ -2590,6 +2947,9 @@ pub async fn run_action(
                 Err(message) => RunActionResult::rejected(message),
             }
         }
+        // Image-input actions only make sense with a capture; text selections
+        // never carry one.
+        ActionKind::Extract => RunActionResult::rejected("提取文字仅用于截图"),
         _ if action.kind.opens_result_without_generation() => {
             let cursor = action_result_cursor(&app, cursor, &selection.payload);
             let selected_text = selection.payload.text.clone();
@@ -2900,7 +3260,7 @@ pub fn show_result_selection(
         text,
         source_app: SourceApplication {
             bundle_id: app.config().identifier.clone(),
-            name: "TextLens 结果".to_owned(),
+            name: "Flick 结果".to_owned(),
         },
         bounds: None,
         start_top: None,
@@ -3158,6 +3518,7 @@ fn ensure_result_caller(window: &WebviewWindow, session_id: &str) -> Result<(), 
 fn ensure_known_caller(window: &WebviewWindow) -> Result<(), String> {
     if window.label() == SETTINGS_LABEL
         || window.label() == TOOLBAR_LABEL
+        || window.label() == windows::SCREENSHOT_LABEL
         || session_from_result_label(window.label()).is_some()
     {
         Ok(())
@@ -3531,6 +3892,7 @@ mod tests {
             },
             action_id: "translate".to_owned(),
             pinned: false,
+            from_screenshot: false,
         }
     }
 

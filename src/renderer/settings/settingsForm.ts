@@ -84,7 +84,8 @@ export function buildSettingsUpdate(settings: PublicSettings):
   }
 
   const captureShortcut = settings.captureShortcut.trim()
-  if (!isValidTauriGlobalShortcut(captureShortcut)) {
+  const screenshotShortcut = settings.screenshotShortcut.trim()
+  if (!isValidTauriGlobalShortcut(captureShortcut) || !isValidTauriGlobalShortcut(screenshotShortcut)) {
     return {
       valid: false,
       message: '捕获快捷键格式无效，请使用例如 CommandOrControl+Shift+S 的格式'
@@ -103,7 +104,9 @@ export function buildSettingsUpdate(settings: PublicSettings):
   }
 
   const actions = sortAndNumberActions(settings.actions)
-  const enabledCount = actions.filter((action) => action.enabled).length
+  // Image-input actions only appear on the screenshot toolbar, so they never
+  // consume the selection-toolbar slot budget.
+  const enabledCount = actions.filter((action) => action.enabled && action.kind !== 'extract').length
   if (enabledCount < 1) return { valid: false, message: '至少需要启用一个工具栏动作' }
   if (enabledCount > MAX_ENABLED_ACTIONS) {
     return { valid: false, message: `最多只能启用 ${MAX_ENABLED_ACTIONS} 个动作` }
@@ -118,7 +121,9 @@ export function buildSettingsUpdate(settings: PublicSettings):
       return { valid: false, message: `“${action.name}”需要选择搜索引擎` }
     }
     if (!isAiActionDefinition(action)) continue
-    if (!action.prompt.includes(TEXT_PLACEHOLDER)) {
+    // Image-input actions (extract) carry the capture as a multimodal part
+    // and have no text placeholder requirement.
+    if (action.kind !== 'extract' && !action.prompt.includes(TEXT_PLACEHOLDER)) {
       return { valid: false, message: `“${action.name}”的提示词必须包含 ${TEXT_PLACEHOLDER}` }
     }
     if (action.providerId) {
@@ -133,6 +138,7 @@ export function buildSettingsUpdate(settings: PublicSettings):
   const candidate: SettingsUpdate = {
     enabled: settings.enabled,
     captureShortcut,
+    screenshotShortcut,
     locale: settings.locale,
     translate: settings.translate,
     toolbar: settings.toolbar,
