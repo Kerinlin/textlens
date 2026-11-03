@@ -122,7 +122,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{
   {
     id: 'providers',
     label: '服务商',
-    blurb: '按顺序：填写 API → 测试连接 → 获取模型 → 保存设置。'
+    blurb: '填写 API，测试连接，再设置模型。'
   },
   {
     id: 'actions',
@@ -263,8 +263,8 @@ export function SettingsApp(): JSX.Element {
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   const [keyBaselines, setKeyBaselines] = useState<Record<string, string>>({})
   const [keyVisible, setKeyVisible] = useState<Record<string, boolean>>({})
-  const [newModelInputs, setNewModelInputs] = useState<Record<string, string>>({})
   const [draggingModelId, setDraggingModelId] = useState<string | null>(null)
+  const [modelSettingsProviderId, setModelSettingsProviderId] = useState<string | null>(null)
   const [accessibility, setAccessibility] = useState<AccessibilityStatus | null>(null)
   const [operation, setOperation] = useState<Operation>(null)
   const [banner, setBanner] = useState<Banner>(null)
@@ -272,7 +272,7 @@ export function SettingsApp(): JSX.Element {
   const [dirty, setDirty] = useState(false)
   const [editor, setEditor] = useState<ActionDefinition | 'new' | null>(null)
   const [providerPendingDelete, setProviderPendingDelete] = useState<PublicProviderSettings | null>(null)
-  const [expandedProviderIds, setExpandedProviderIds] = useState<ReadonlySet<string> | null>(null)
+  const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null)
   const [actionPendingDelete, setActionPendingDelete] = useState<ActionDefinition | null>(null)
   const [modelPicker, setModelPicker] = useState<ModelPickerState | null>(null)
   const [quitConfirmationOpen, setQuitConfirmationOpen] = useState(false)
@@ -494,6 +494,7 @@ export function SettingsApp(): JSX.Element {
         if (disposed) return
         const normalized = normalizePublicSettings(settings)
         setDraft(normalized)
+        setExpandedProviderId(normalized.providers[0]?.id ?? null)
         // Do not preload API keys — fetch only when the user clicks show.
         resetProviderKeyFields()
       })
@@ -566,6 +567,7 @@ export function SettingsApp(): JSX.Element {
     ),
     [draft?.toolbar.screenshotItems, draft?.toolbar.screenshotOrder, imageActions]
   )
+  const modelSettingsProvider = draft?.providers.find((provider) => provider.id === modelSettingsProviderId) ?? null
   const persist = async (): Promise<PublicSettings | null> => {
     if (!draft) return null
     const validation = buildSettingsUpdate(draft)
@@ -725,16 +727,10 @@ export function SettingsApp(): JSX.Element {
     }
   }
 
-  const providerIsExpanded = (providerId: string): boolean =>
-    expandedProviderIds?.has(providerId) ?? draft?.providers[0]?.id === providerId
+  const providerIsExpanded = (providerId: string): boolean => expandedProviderId === providerId
 
   const toggleProviderDetails = (providerId: string): void => {
-    setExpandedProviderIds((current) => {
-      const next = new Set(current ?? (draft?.providers[0]?.id ? [draft.providers[0].id] : []))
-      if (next.has(providerId)) next.delete(providerId)
-      else next.add(providerId)
-      return next
-    })
+    setExpandedProviderId((current) => current === providerId ? null : providerId)
   }
 
   const addProvider = (): void => {
@@ -748,11 +744,7 @@ export function SettingsApp(): JSX.Element {
       models: []
     }
     changeDraft((current) => ({ ...current, providers: [...current.providers, provider] }))
-    setExpandedProviderIds((current) => {
-      const next = new Set(current ?? (draft?.providers[0]?.id ? [draft.providers[0].id] : []))
-      next.add(id)
-      return next
-    })
+    setExpandedProviderId(id)
   }
 
   const changeProvider = (
@@ -779,12 +771,7 @@ export function SettingsApp(): JSX.Element {
       delete next[provider.id]
       return next
     })
-    setExpandedProviderIds((current) => {
-      if (current === null) return null
-      const next = new Set(current)
-      next.delete(provider.id)
-      return next
-    })
+    setExpandedProviderId((current) => current === provider.id ? null : current)
     setProviderPendingDelete(null)
     setBanner({ kind: 'success', text: `已移除“${provider.name}”；保存设置后生效` })
   }
@@ -940,20 +927,6 @@ export function SettingsApp(): JSX.Element {
       models.splice(newIndex, 0, moved)
       return { ...provider, models }
     })
-  }
-
-  const addManualModel = (provider: PublicProviderSettings): void => {
-    const id = (newModelInputs[provider.id] ?? '').trim()
-    if (!id) return
-    if (provider.models.some((model) => model.id === id)) {
-      setBanner({ kind: 'error', text: `模型“${id}”已存在` })
-      return
-    }
-    changeProvider(provider.id, (current) => ({
-      ...current,
-      models: [...current.models, { id, name: id, thinkingLevels: [] }]
-    }))
-    setNewModelInputs((current) => ({ ...current, [provider.id]: '' }))
   }
 
   // Action-list operations (edit, toggle, delete, reorder) take effect
@@ -1417,7 +1390,7 @@ export function SettingsApp(): JSX.Element {
                 </div>
               </header>
               <div
-                className={`provider-grid ${providerIsExpanded(provider.id) ? 'provider-grid--open' : ''}`}
+                className="provider-grid"
                 id={`provider-details-${provider.id}`}
                 hidden={!providerIsExpanded(provider.id)}
               >
@@ -1466,60 +1439,15 @@ export function SettingsApp(): JSX.Element {
                 <div className="provider-actions">
                   <button className="button" type="button" disabled={busy} onClick={() => void testProvider(provider)}>
                     {operation === `test:${provider.id}` && <LoaderCircle className="settings-spin" size={15} />}测试连接</button>
-                  <button className="button" type="button" disabled={busy} onClick={() => void openModelPicker(provider)}>
-                    {operation === `fetch:${provider.id}` ? <LoaderCircle className="settings-spin" size={15} /> : <RefreshCw size={15} />}获取模型</button>
                   <button className="button button--danger" type="button" disabled={busy || !provider.keyConfigured}
                     onClick={() => void clearProviderKey(provider)}>清除密钥</button>
-                </div>
-                <div className="field field--wide provider-models"><span className="field__label">模型（{provider.models.length}）</span>
-                  <div className="model-add-row"><input className="control" value={newModelInputs[provider.id] ?? ''}
-                    placeholder="手动添加模型 ID" spellCheck={false}
-                    onChange={(event) => setNewModelInputs((current) => ({ ...current, [provider.id]: event.target.value }))}
-                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addManualModel(provider) } }} />
-                    <button className="button" type="button" onClick={() => addManualModel(provider)}>添加</button></div>
-                  <DndContext
-                    sensors={dragSensors}
-                    collisionDetection={closestCenter}
-                    onDragStart={(event) => setDraggingModelId(String(event.active.id))}
-                    onDragCancel={() => setDraggingModelId(null)}
-                    onDragEnd={(event) => {
-                      setDraggingModelId(null)
-                      const { active, over } = event
-                      if (!over) return
-                      reorderProviderModels(provider.id, String(active.id), String(over.id))
-                    }}
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => setModelSettingsProviderId(provider.id)}
                   >
-                    <SortableContext
-                      items={provider.models.map((model) => model.id)}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      <div className="model-row-list" role="list">
-                        {provider.models.map((model) => (
-                          <SortableModelRow
-                            key={model.id}
-                            model={model}
-                            dragging={draggingModelId === model.id}
-                            onToggleLevel={(level) => changeProvider(provider.id, (current) => ({
-                              ...current,
-                              models: current.models.map((candidate) =>
-                                candidate.id === model.id
-                                  ? toggleThinkingLevel(candidate, level)
-                                  : candidate
-                              )
-                            }))}
-                            onRemove={() => changeDraft((current) =>
-                              removeProviderModelFromSettings(current, provider.id, model.id)
-                            )}
-                          />
-                        ))}
-                        {provider.models.length === 0 && (
-                          <span className="model-empty">
-                            尚无模型。可点「获取模型」多选添加，或在上方手动输入模型 ID。
-                          </span>
-                        )}
-                      </div>
-                    </SortableContext>
-                  </DndContext>
+                    模型设置
+                  </button>
                 </div>
               </div>
             </article>
@@ -1932,6 +1860,33 @@ export function SettingsApp(): JSX.Element {
           onSave={() => void saveAndQuit()}
         />
       )}
+      {modelSettingsProvider && (
+        <ModelSettingsDialog
+          provider={modelSettingsProvider}
+          fetching={operation === `fetch:${modelSettingsProvider.id}`}
+          sensors={dragSensors}
+          draggingModelId={draggingModelId}
+          onClose={() => setModelSettingsProviderId(null)}
+          onFetch={() => void openModelPicker(modelSettingsProvider)}
+          onDragStart={(event) => setDraggingModelId(String(event.active.id))}
+          onDragCancel={() => setDraggingModelId(null)}
+          onDragEnd={(event) => {
+            setDraggingModelId(null)
+            const { active, over } = event
+            if (!over) return
+            reorderProviderModels(modelSettingsProvider.id, String(active.id), String(over.id))
+          }}
+          onToggleLevel={(modelId, level) => changeProvider(modelSettingsProvider.id, (current) => ({
+            ...current,
+            models: current.models.map((candidate) =>
+              candidate.id === modelId ? toggleThinkingLevel(candidate, level) : candidate
+            )
+          }))}
+          onRemove={(modelId) => changeDraft((current) =>
+            removeProviderModelFromSettings(current, modelSettingsProvider.id, modelId)
+          )}
+        />
+      )}
       {modelPicker && (
         <ModelPickerDialog
           providerName={modelPicker.providerName}
@@ -2097,6 +2052,106 @@ function SettingSwitch({ title, description, checked, onChange, extra }: {
       onChange={(event) => onChange(event.target.checked)} /><span aria-hidden="true" /><span className="sr-only">{title}</span></label></div></div>
 }
 
+function ModelSettingsDialog({
+  provider,
+  fetching,
+  sensors,
+  draggingModelId,
+  onClose,
+  onFetch,
+  onDragStart,
+  onDragCancel,
+  onDragEnd,
+  onToggleLevel,
+  onRemove
+}: {
+  provider: PublicProviderSettings
+  fetching: boolean
+  sensors: ReturnType<typeof useSensors>
+  draggingModelId: string | null
+  onClose: () => void
+  onFetch: () => void
+  onDragStart: (event: DragStartEvent) => void
+  onDragCancel: () => void
+  onDragEnd: (event: DragEndEvent) => void
+  onToggleLevel: (modelId: string, level: ThinkingLevel) => void
+  onRemove: (modelId: string) => void
+}): JSX.Element {
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const models = needle
+    ? provider.models.filter((model) =>
+      model.id.toLowerCase().includes(needle) || model.name.toLowerCase().includes(needle)
+    )
+    : provider.models
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose()
+    }}>
+      <section
+        className="dialog-card model-settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="model-settings-title"
+      >
+        <header className="dialog-header">
+          <h2 id="model-settings-title">模型设置 · {provider.name}</h2>
+          <button className="icon-button" type="button" aria-label="关闭模型设置" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="model-settings-toolbar">
+          <input
+            className="control"
+            value={query}
+            placeholder="搜索"
+            aria-label="搜索模型"
+            spellCheck={false}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <button className="button" type="button" disabled={fetching} onClick={onFetch}>
+            {fetching ? <LoaderCircle className="settings-spin" size={15} /> : <RefreshCw size={15} />}
+            获取模型
+          </button>
+        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={onDragStart}
+          onDragCancel={onDragCancel}
+          onDragEnd={onDragEnd}
+        >
+          <SortableContext items={models.map((model) => model.id)} strategy={verticalListSortingStrategy}>
+            <div className="model-row-list" role="list">
+              {models.map((model) => (
+                <SortableModelRow
+                  key={model.id}
+                  model={model}
+                  dragging={draggingModelId === model.id}
+                  onToggleLevel={(level) => onToggleLevel(model.id, level)}
+                  onRemove={() => onRemove(model.id)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+        <footer className="dialog-actions model-settings-dialog__actions">
+          <button className="button button--primary" type="button" onClick={onClose}>完成</button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
 function SortableModelRow({ model, dragging, onToggleLevel, onRemove }: {
   model: ProviderModel
   dragging: boolean
@@ -2222,7 +2277,7 @@ function ModelPickerDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+    <div className="dialog-backdrop dialog-backdrop--front" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onCancel()
     }}>
       <section

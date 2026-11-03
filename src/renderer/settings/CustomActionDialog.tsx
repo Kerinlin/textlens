@@ -301,6 +301,16 @@ export function CustomActionDialog({
           </button>
         </header>
         <form className="dialog-form" onSubmit={submit}>
+          <div className="field">
+            <span className="field__label">图标</span>
+            <div className="icon-field">
+              <ActionIconPicker value={icon} onChange={(value) => {
+                setIcon(value)
+                setError('')
+              }} />
+              <span className="icon-field__hint">点击更换图标</span>
+            </div>
+          </div>
           <div className="dialog-form-grid">
             <label className="field">
               <span className="field__label">动作名称</span>
@@ -330,14 +340,6 @@ export function CustomActionDialog({
             </label>
           </div>
 
-          <label className="field">
-            <span className="field__label">图标</span>
-            <ActionIconPicker value={icon} onChange={(value) => {
-              setIcon(value)
-              setError('')
-            }} />
-          </label>
-
           {kind === 'search' && (
             <label className="field">
               <span className="field__label">默认搜索引擎</span>
@@ -359,56 +361,52 @@ export function CustomActionDialog({
 
           {isAiKind(kind) && (
             <>
-              <label className="field">
-                <span className="field__label">模型</span>
-                <select
-                  className="control"
-                  aria-label="模型"
-                  value={modelSelectValue}
-                  onChange={(event) => changeModelRoute(event.target.value)}
-                >
-                  <option value="">尚未选择</option>
-                  {modelGroups.map((group) => (
-                    <optgroup
-                      key={group.id}
-                      label={group.keyConfigured ? group.name : `${group.name}（未配置密钥）`}
-                    >
-                      {group.choices.map((choice) => (
-                        <option key={choice.value} value={choice.value}>
-                          {choice.modelName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <span className="field__hint">
-                  已启用的服务商与其模型列在同一列表中；可在「服务商」中关闭不需要的服务商。
-                </span>
-              </label>
-
-              {thinkingLevels.length > 0 && (
+              <div className="dialog-form-grid dialog-form-grid--model">
                 <label className="field">
-                  <span className="field__label">思考强度</span>
+                  <span className="field__label">模型</span>
                   <select
                     className="control"
-                    aria-label="思考强度"
-                    value={thinkingMode}
-                    onChange={(event) => setThinkingMode(event.target.value as ThinkingMode)}
+                    aria-label="模型"
+                    value={modelSelectValue}
+                    onChange={(event) => changeModelRoute(event.target.value)}
                   >
-                    {showThinkingOff && (
-                      <option value="off">关闭思考（更快首字）</option>
-                    )}
-                    {thinkingLevels.map((level) => (
-                      <option key={level} value={level}>
-                        {THINKING_LEVEL_LABELS[level]}
-                      </option>
+                    <option value="">尚未选择</option>
+                    {modelGroups.map((group) => (
+                      <optgroup
+                        key={group.id}
+                        label={group.keyConfigured ? group.name : `${group.name}（未配置密钥）`}
+                      >
+                        {group.choices.map((choice) => (
+                          <option key={choice.value} value={choice.value}>
+                            {choice.modelName}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
-                  <span className="field__hint">
-                    只显示该模型已配置的思考档位；关闭思考可缩短首字延迟。
-                  </span>
                 </label>
-              )}
+
+                {thinkingLevels.length > 0 && (
+                  <label className="field">
+                    <span className="field__label">思考强度</span>
+                    <select
+                      className="control"
+                      aria-label="思考强度"
+                      value={thinkingMode}
+                      onChange={(event) => setThinkingMode(event.target.value as ThinkingMode)}
+                    >
+                      {showThinkingOff && (
+                        <option value="off">关闭思考（更快首字）</option>
+                      )}
+                      {thinkingLevels.map((level) => (
+                        <option key={level} value={level}>
+                          {THINKING_LEVEL_LABELS[level]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
 
               <label className="field">
                 <span className="field__label dialog-prompt-label">

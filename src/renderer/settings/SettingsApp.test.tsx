@@ -1009,7 +1009,9 @@ describe('SettingsApp provider deletion', () => {
     render(<SettingsApp />)
     await goToSettingsSection('服务商')
 
-    expect(await screen.findByRole('button', { name: '获取模型' })).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '模型设置' }))
+    expect(await screen.findByRole('dialog', { name: /模型设置/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '获取模型' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '同步模型' })).not.toBeInTheDocument()
 
     expect(await screen.findByRole('button', { name: '拖动模型 gpt-4o-mini' })).toBeInTheDocument()
@@ -1076,6 +1078,7 @@ describe('SettingsApp provider deletion', () => {
     render(<SettingsApp />)
     await goToSettingsSection('服务商')
 
+    fireEvent.click(await screen.findByRole('button', { name: '模型设置' }))
     fireEvent.click(await screen.findByRole('button', { name: '获取模型' }))
     expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeInTheDocument()
     await waitFor(() => expect(listProviderModels).toHaveBeenCalled())
@@ -1133,6 +1136,7 @@ describe('SettingsApp provider deletion', () => {
 
     render(<SettingsApp />)
     await goToSettingsSection('服务商')
+    fireEvent.click(await screen.findByRole('button', { name: '模型设置' }))
     fireEvent.click(await screen.findByRole('button', { name: '获取模型' }))
     expect(await screen.findByRole('dialog', { name: '选择模型' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('checkbox', { name: /gpt-4o$/i }))
@@ -1170,6 +1174,7 @@ describe('SettingsApp provider deletion', () => {
 
     render(<SettingsApp />)
     await goToSettingsSection('服务商')
+    fireEvent.click(await screen.findByRole('button', { name: '模型设置' }))
     fireEvent.click(await screen.findByRole('button', { name: '获取模型' }))
     expect(await screen.findByText('无法连接服务商')).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: '选择模型' })).not.toBeInTheDocument()
@@ -1236,6 +1241,7 @@ describe('SettingsApp provider deletion', () => {
     render(<SettingsApp />)
     await goToSettingsSection('服务商')
 
+    fireEvent.click(await screen.findByRole('button', { name: '模型设置' }))
     const handle = await screen.findByRole('button', { name: '拖动模型 gpt-4o-mini' })
     handle.focus()
     fireEvent.keyDown(handle, { key: ' ', code: 'Space' })
